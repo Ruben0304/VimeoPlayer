@@ -26,11 +26,10 @@ final class HomeViewModel: ObservableObject {
 
         async let movies = fetch("movies", "Películas recién añadidas", .movies)
         async let series = fetch("series", "Series recién añadidas", .tvshows)
-        async let updated = fetch("series-updated", "Series actualizadas", .tvshows, orderBy: "post_modified")
         async let animes = fetch("animes", "Animes recién añadidos", .animes)
 
         // Una fila que falla no debe tumbar el resto de la pantalla.
-        let loaded = await [movies, series, updated, animes].compactMap { $0 }
+        let loaded = await [movies, series, animes].compactMap { $0 }
         if loaded.isEmpty {
             if shelves.isEmpty { state = .failed }
         } else {
@@ -109,42 +108,63 @@ final class SearchViewModel: ObservableObject {
         if query.count < 3 { state = .tooShort; suggestions = []; fallbackName = nil; return }
 
         state = .loading
+        suggestions = []
+        fallbackName = nil
         try? await Task.sleep(for: .milliseconds(400))
         if Task.isCancelled { return }
 
-        // La búsqueda se hace con lo escrito y con su traducción al inglés, y se combinan.
-        // TMDB va en paralelo: no debe retrasar ni romper la búsqueda del catálogo.
-        let translated = await QueryTranslator.shared.english(query)
+        // TMDB (traducción y sugerencias) va en paralelo y nunca retrasa los resultados:
+        // lo escrito se busca de inmediato y lo demás se suma cuando llega.
+        async let extras = Self.extras(for: query)
+        let raw = await Result { try await LaMovieAPI.search(query) }
         if Task.isCancelled { return }
-        let queries = [query] + [translated].compactMap { $0 }
 
-        async let tmdb = Self.suggestions(for: queries)
-        do {
-            var items = try await Self.catalogSearch(queries)
-            let found = await tmdb
+        if case .success(let hits) = raw, !hits.isEmpty {
+            state = .results(hits)
+            let (translated, found) = await extras
             if Task.isCancelled { return }
             suggestions = found
-            fallbackName = nil
-
-            // Sin resultados: se prueban los otros nombres del título en el catálogo.
-            if items.isEmpty {
-                var tried = Set(queries.map { $0.lowercased() })
-                for name in found.flatMap(\.allNames) where name.count >= 3 && tried.insert(name.lowercased()).inserted {
-                    if let hits = try? await LaMovieAPI.search(name), !hits.isEmpty {
-                        items = hits
-                        fallbackName = name
-                        break
-                    }
-                    if Task.isCancelled { return }
-                }
+            if let translated, translated.lowercased() != query.lowercased(),
+               let more = try? await LaMovieAPI.search(translated), !Task.isCancelled {
+                var seen = Set(hits.map(\.id))
+                let added = more.filter { seen.insert($0.id).inserted }
+                if !added.isEmpty { state = .results(hits + added) }
             }
-            if Task.isCancelled { return }
-            state = items.isEmpty ? .empty : .results(items)
-        } catch {
-            if Task.isCancelled { return }
-            suggestions = await tmdb
-            state = .failed
+            return
         }
+
+        // Sin resultados con lo escrito: se prueba la traducción y, si hace falta, los otros nombres.
+        let (translated, found) = await extras
+        if Task.isCancelled { return }
+        suggestions = found
+        var items: [CatalogItem] = []
+        var failed = false
+        if case .failure = raw { failed = true }
+        if let translated, translated.lowercased() != query.lowercased() {
+            if let hits = try? await LaMovieAPI.search(translated) { items = hits; failed = false }
+            if Task.isCancelled { return }
+        }
+        if items.isEmpty {
+            var tried = Set([query, translated].compactMap { $0?.lowercased() })
+            for name in found.flatMap(\.allNames) where name.count >= 3 && tried.insert(name.lowercased()).inserted {
+                if let hits = try? await LaMovieAPI.search(name), !hits.isEmpty {
+                    items = hits
+                    fallbackName = name
+                    failed = false
+                    break
+                }
+                if Task.isCancelled { return }
+            }
+        }
+        if Task.isCancelled { return }
+        state = !items.isEmpty ? .results(items) : (failed ? .failed : .empty)
+    }
+
+    /// Traducción al inglés de lo escrito y sugerencias de TMDB para ambas variantes.
+    private static func extras(for query: String) async -> (String?, [TitleSuggestion]) {
+        let translated = await QueryTranslator.shared.english(query)
+        let queries = [query] + [translated].compactMap { $0 }
+        return (translated, await suggestions(for: queries))
     }
 
     /// Resultados del catálogo para todas las variantes, sin repetir y con la escrita primero.
@@ -637,6 +657,7 @@ struct HomeView: View {
                             .foregroundStyle(.white)
                         Button("Reintentar") { Task { await model.load() } }
                             .buttonStyle(.glass)
+                            .pointerCursor()
                             .tint(.white)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -723,6 +744,7 @@ private struct CategoryGridView: View {
                         .foregroundStyle(.white)
                     Button("Reintentar") { Task { await model.reload() } }
                         .buttonStyle(.glass)
+                        .pointerCursor()
                         .tint(.white)
                 }
             }
@@ -1201,6 +1223,7 @@ private struct SearchablePicker: View {
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Capsule())
+        .pointerCursor()
         .popover(isPresented: $isOpen, arrowEdge: .bottom) {
             VStack(spacing: 10) {
                 HStack(spacing: 8) {
@@ -1270,9 +1293,11 @@ private struct ProviderTile: View {
     let isSelected: Bool
     let action: () -> Void
     @State private var hovering = false
+    @State private var brand: Color?
 
     private let size: CGFloat = 120
     private var active: Bool { hovering || isSelected }
+    private var accent: Color { brand ?? .white }
 
     var body: some View {
         Button(action: action) {
@@ -1285,10 +1310,10 @@ private struct ProviderTile: View {
                 .frame(width: size, height: size)
                 .clipShape(Circle())
                 .overlay(
-                    Circle().strokeBorder(active ? Color.white.opacity(0.9) : .white.opacity(0.08),
+                    Circle().strokeBorder(active ? accent.opacity(0.95) : .white.opacity(0.08),
                                           lineWidth: active ? 2 : 1)
                 )
-                .shadow(color: active ? .white.opacity(0.3) : .black.opacity(0.5),
+                .shadow(color: active ? accent.opacity(0.45) : .black.opacity(0.5),
                         radius: active ? 18 : 10, y: active ? 4 : 6)
                 .scaleEffect(hovering ? 1.05 : 1)
 
@@ -1303,6 +1328,62 @@ private struct ProviderTile: View {
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: hovering)
         .onHover { hovering = $0 }
         .help(provider.name)
+        .task(id: provider.logoURL) { brand = await BrandColor.color(for: provider.logoURL) }
+    }
+}
+
+/// Color de marca de una plataforma, sacado del color más presente y saturado de su logo.
+@MainActor
+private enum BrandColor {
+    private static var cache: [URL: Color] = [:]
+
+    static func color(for url: URL?) async -> Color? {
+        guard let url else { return nil }
+        if let hit = cache[url] { return hit }
+        var loaded = ImageCache.shared.image(for: url)
+        if loaded == nil { loaded = await ImageCache.shared.load(url, category: .platform) }
+        guard let image = loaded, let color = dominant(of: image) else { return nil }
+        cache[url] = color
+        return color
+    }
+
+    private static func dominant(of image: PlatformImage) -> Color? {
+        #if os(macOS)
+        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        #else
+        guard let cg = image.cgImage else { return nil }
+        #endif
+        let side = 24
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
+        let drew = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(
+                data: buffer.baseAddress, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return false }
+            context.interpolationQuality = .medium
+            context.draw(cg, in: CGRect(x: 0, y: 0, width: side, height: side))
+            return true
+        }
+        guard drew else { return nil }
+
+        var r = 0.0, g = 0.0, b = 0.0, total = 0.0
+        for i in stride(from: 0, to: pixels.count, by: 4) {
+            let a = Double(pixels[i + 3]) / 255
+            guard a > 0.5 else { continue }
+            let pr = Double(pixels[i]) / 255 / a, pg = Double(pixels[i + 1]) / 255 / a, pb = Double(pixels[i + 2]) / 255 / a
+            let maxC = max(pr, pg, pb), minC = min(pr, pg, pb)
+            let saturation = maxC == 0 ? 0 : (maxC - minC) / maxC
+            // Se ignoran el blanco, el negro y los grises: no son "el color" de la marca.
+            guard saturation > 0.25, maxC > 0.25 else { continue }
+            let weight = saturation * saturation
+            r += pr * weight; g += pg * weight; b += pb * weight; total += weight
+        }
+        guard total > 0 else { return nil }
+        let base = (r / total, g / total, b / total)
+        // Se sube el brillo para que el borde y el resplandor se vean sobre fondo oscuro.
+        let peak = max(base.0, base.1, base.2)
+        let boost = peak > 0 ? min(1 / peak, 1.6) : 1
+        return Color(red: min(base.0 * boost, 1), green: min(base.1 * boost, 1), blue: min(base.2 * boost, 1))
     }
 }
 
@@ -1358,17 +1439,14 @@ private struct SearchResultsView: View {
                     if let fallbackName {
                         FallbackBanner(name: fallbackName)
                     }
-                    if !suggestions.isEmpty {
-                        NameSuggestionsView(
-                            title: "También conocida como",
-                            suggestions: suggestions,
-                            onPick: onPick
-                        )
-                    }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
                         ForEach(items) { item in
                             PosterCard(item: item)
                         }
+                    }
+                    if !suggestions.isEmpty {
+                        SuggestionsDisclosure(suggestions: suggestions, onPick: onPick)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
                 }
                 .padding(36)
@@ -1404,6 +1482,43 @@ private struct FallbackBanner: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .glassEffect(.regular, in: Capsule())
+    }
+}
+
+/// Botón opcional bajo los resultados: al abrirlo muestra las sugerencias de TMDB.
+private struct SuggestionsDisclosure: View {
+    let suggestions: [TitleSuggestion]
+    let onPick: (String) -> Void
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Button {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkle.magnifyingglass")
+                    Text(expanded ? "Ocultar sugerencias" : "¿No es lo que buscabas?")
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.bold))
+                        .rotationEffect(.degrees(expanded ? 180 : 0))
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 10)
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.interactive(), in: Capsule())
+            .pointerCursor()
+
+            if expanded {
+                NameSuggestionsView(title: "También conocida como", suggestions: suggestions, onPick: onPick)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: suggestions)
     }
 }
 
@@ -1721,10 +1836,12 @@ private struct HeroView: View {
                             .font(.headline)
                             .padding(.horizontal, 26)
                             .padding(.vertical, 12)
-                            .background(.white, in: Capsule())
                             .foregroundStyle(.black)
+                            .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
+                    .glassEffect(.regular.tint(.white).interactive(), in: Capsule())
+                    .pointerCursor()
 
                     NavigationLink(value: item) {
                         Label("Más información", systemImage: "info.circle")
@@ -1736,6 +1853,7 @@ private struct HeroView: View {
                     }
                     .buttonStyle(.plain)
                     .glassEffect(.regular.interactive(), in: Capsule())
+                    .pointerCursor()
                 }
                 .padding(.top, 4)
             }
@@ -1830,6 +1948,40 @@ private struct PosterCard: View {
             .frame(width: 190)
             .animation(.easeInOut(duration: 0.15), value: hovering)
             .onHover { hovering = $0 }
+    }
+}
+
+/// Sinopsis de la ficha: encabezado, texto grande con buen interlineado y ancho de lectura cómodo.
+private struct SynopsisSection: View {
+    let text: String
+
+    private var paragraphs: [String] {
+        text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Sinopsis")
+                .font(.system(.title3, design: .rounded).weight(.bold))
+                .foregroundStyle(.white)
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
+                    Text(paragraph)
+                        .font(.system(size: 17, weight: .regular, design: .default))
+                        .lineSpacing(6)
+                        .foregroundStyle(.white.opacity(0.88))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: 780, alignment: .leading)
+            .textSelection(.enabled)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.08), lineWidth: 1))
     }
 }
 
@@ -1942,6 +2094,7 @@ struct DetailView: View {
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: Circle())
+                .pointerCursor()
                 .padding(24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
@@ -2021,10 +2174,12 @@ struct DetailView: View {
                                         .font(.headline)
                                         .padding(.horizontal, 28)
                                         .padding(.vertical, 14)
-                                        .background(.white, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                                         .foregroundStyle(.black)
+                                        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                                 }
                                 .buttonStyle(.plain)
+                                .glassEffect(.regular.tint(.white).interactive(), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .pointerCursor()
 
                                 Button {
                                     downloadTarget = PlaybackTarget(postId: item.id, title: item.displayTitle)
@@ -2038,6 +2193,7 @@ struct DetailView: View {
                                 }
                                 .buttonStyle(.plain)
                                 .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .pointerCursor()
                         }
 
                         if let trailer = tmdbDetails?.trailer {
@@ -2053,6 +2209,7 @@ struct DetailView: View {
                             }
                             .buttonStyle(.plain)
                             .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .pointerCursor()
                         }
                     }
 
@@ -2078,9 +2235,7 @@ struct DetailView: View {
 
             VStack(alignment: .leading, spacing: 18) {
                 if !overviewText.isEmpty {
-                    Text(overviewText)
-                        .font(.body)
-                        .foregroundStyle(.white.opacity(0.85))
+                    SynopsisSection(text: overviewText)
                 }
 
                 if let details = tmdbDetails {
@@ -2221,6 +2376,7 @@ struct DetailView: View {
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: Capsule())
+                .pointerCursor()
             }
             if seasons.count > 1 {
                 Picker("Temporada", selection: $season) {
@@ -2257,6 +2413,7 @@ struct DetailView: View {
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: Circle())
+                .pointerCursor()
                 .help("Descargar")
             }
         }

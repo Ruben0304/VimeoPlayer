@@ -134,6 +134,7 @@ struct DownloadSheet: View {
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: Capsule())
+                .pointerCursor()
             }
             .frame(maxHeight: .infinity)
         } else {
