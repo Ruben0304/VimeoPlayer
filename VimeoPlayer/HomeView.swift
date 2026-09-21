@@ -233,10 +233,10 @@ final class NavigationRouter: ObservableObject {
 /// Dimensiones de la tarjeta de detalle, compartidas con la animación de expansión
 /// para que la portada termine exactamente donde `DetailView` la va a mostrar.
 enum DetailCard {
-    static let cornerRadius: CGFloat = 22
-    static let maxWidth: CGFloat = 820
-    static let topMargin: CGFloat = 28
-    static let horizontalMargin: CGFloat = 40
+    static let cornerRadius: CGFloat = 0
+    static let topMargin: CGFloat = 0
+    static let horizontalMargin: CGFloat = 0
+    static let contentHorizontalPadding: CGFloat = 48
 }
 
 /// Coordina la animación de "expandir" un póster hasta la tarjeta de detalle al abrirlo.
@@ -322,14 +322,14 @@ private struct ExpandingPosterOverlay: View {
         .allowsHitTesting(false)
     }
 
-    /// La misma cabecera 16:9 que `DetailView` dibuja dentro de su tarjeta.
+    /// La misma cabecera a pantalla completa que `DetailView` dibuja arriba del todo.
     private func targetRect(in contentFrame: CGRect) -> CGRect {
         guard contentFrame != .zero else { return .zero }
-        let cardWidth = max(0, min(contentFrame.width - DetailCard.horizontalMargin * 2, DetailCard.maxWidth))
+        let cardWidth = contentFrame.width
         let headerHeight = cardWidth * 9 / 16
         return CGRect(
-            x: contentFrame.midX - cardWidth / 2,
-            y: contentFrame.minY + DetailCard.topMargin,
+            x: contentFrame.minX,
+            y: contentFrame.minY,
             width: cardWidth,
             height: headerHeight
         )
@@ -560,7 +560,7 @@ private struct CategoryGridView: View {
 
     var body: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 16, alignment: .top)], alignment: .leading, spacing: 20) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
                 ForEach(model.items) { item in
                     PosterCard(item: item)
                         .task { await model.loadMoreIfNeeded(currentItem: item) }
@@ -745,7 +745,7 @@ private struct SearchLandingView: View {
                                 .foregroundStyle(.white.opacity(0.5))
                         }
                         ScrollView(.horizontal, showsIndicators: false) {
-                            LazyHStack(alignment: .top, spacing: 16) {
+                            LazyHStack(alignment: .top, spacing: 12) {
                                 ForEach(recentlyViewed.items) { item in
                                     PosterCard(item: item)
                                 }
@@ -851,7 +851,7 @@ private struct SearchResultsView: View {
             message("No se pudo completar la búsqueda", systemImage: "wifi.exclamationmark")
         case .results(let items):
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 16, alignment: .top)], alignment: .leading, spacing: 20) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
                     ForEach(items) { item in
                         PosterCard(item: item)
                     }
@@ -999,7 +999,7 @@ private struct ShelfView: View {
                 .foregroundStyle(.white.opacity(0.92))
                 .padding(.horizontal, 36)
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 16) {
+                LazyHStack(alignment: .top, spacing: 12) {
                     ForEach(shelf.items) { item in
                         PosterCard(item: item)
                     }
@@ -1033,52 +1033,39 @@ private struct PosterCard: View {
     }
 
     private var cardBody: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Brand.card
-                .aspectRatio(2.0 / 3.0, contentMode: .fit)
-                .overlay {
-                    PosterImage(url: posterURL)
-                        .aspectRatio(contentMode: .fill)
-                        .clipped()
+        Brand.card
+            .aspectRatio(2.0 / 3.0, contentMode: .fit)
+            .overlay {
+                PosterImage(url: posterURL)
+                    .aspectRatio(contentMode: .fill)
+                    .clipped()
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(.white.opacity(hovering ? 1 : 0), lineWidth: 2)
+            )
+            .overlay(alignment: .topTrailing) {
+                if let rating = item.ratingText {
+                    Label(rating, systemImage: "star.fill")
+                        .font(.caption2.weight(.bold))
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .foregroundStyle(.white)
+                        .glassEffect(.regular, in: Capsule())
+                        .padding(6)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(.white.opacity(hovering ? 0.9 : 0.06), lineWidth: hovering ? 2 : 1)
-                )
-                .overlay(alignment: .topTrailing) {
-                    if let rating = item.ratingText {
-                        Label(rating, systemImage: "star.fill")
-                            .font(.caption2.weight(.bold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .foregroundStyle(.white)
-                            .glassEffect(.regular, in: Capsule())
-                            .padding(6)
-                    }
+            }
+            .background(
+                GeometryReader { geo in
+                    Color.clear
+                        .onAppear { posterFrame = geo.frame(in: .global) }
+                        .onChange(of: geo.frame(in: .global)) { _, newValue in posterFrame = newValue }
                 }
-                .background(
-                    GeometryReader { geo in
-                        Color.clear
-                            .onAppear { posterFrame = geo.frame(in: .global) }
-                            .onChange(of: geo.frame(in: .global)) { _, newValue in posterFrame = newValue }
-                    }
-                )
-                .shadow(color: .black.opacity(hovering ? 0.5 : 0.3), radius: hovering ? 20 : 8, y: hovering ? 10 : 4)
-
-            Text(item.displayTitle)
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(.white.opacity(hovering ? 1 : 0.75))
-                .lineLimit(2, reservesSpace: true)
-                .multilineTextAlignment(.leading)
-        }
-        .frame(width: 190)
-        // Se escala la tarjeta completa (póster + título), no solo el póster: así el
-        // texto se mueve junto con la imagen en vez de quedar tapado por ella.
-        .scaleEffect(hovering ? 1.1 : 1, anchor: .top)
-        .animation(.spring(response: 0.32, dampingFraction: 0.7), value: hovering)
-        .zIndex(hovering ? 1 : 0)
-        .onHover { hovering = $0 }
+            )
+            .frame(width: 190)
+            .animation(.easeInOut(duration: 0.15), value: hovering)
+            .onHover { hovering = $0 }
     }
 }
 
@@ -1126,35 +1113,28 @@ struct DetailView: View {
 
     var body: some View {
         ZStack {
-            if let onDismiss {
-                Color.black.opacity(0.4)
-                    .ignoresSafeArea()
-                    .contentShape(Rectangle())
-                    .onTapGesture { onDismiss() }
-            } else {
-                AppBackground()
-            }
+            AppBackground()
 
             ScrollView {
                 card
-                    .overlay(alignment: .topLeading) {
-                        if let onDismiss {
-                            Button(action: onDismiss) {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundStyle(.white)
-                                    .padding(10)
-                                    .contentShape(Circle())
-                            }
-                            .buttonStyle(.plain)
-                            .glassEffect(.regular.interactive(), in: Circle())
-                            .padding(14)
-                        }
-                    }
-                    .padding(.horizontal, DetailCard.horizontalMargin)
-                    .padding(.top, DetailCard.topMargin)
                     .padding(.bottom, 40)
                     .frame(maxWidth: .infinity)
+            }
+            .scrollIndicators(.hidden)
+            .ignoresSafeArea(edges: .top)
+
+            if let onDismiss {
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.white)
+                        .padding(10)
+                        .contentShape(Circle())
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: Circle())
+                .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
         .navigationTitle(item.displayTitle)
@@ -1181,8 +1161,8 @@ struct DetailView: View {
         hasWebDL = downloads.contains { $0.category == .webDL }
     }
 
-    /// Tarjeta flotante (no a pantalla completa) cuya cabecera coincide en tamaño y
-    /// posición con el destino de la animación de expansión del póster.
+    /// Ficha a pantalla completa cuya cabecera coincide en tamaño con el destino
+    /// de la animación de expansión del póster.
     private var card: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .bottomLeading) {
@@ -1195,59 +1175,67 @@ struct DetailView: View {
                     }
 
                 LinearGradient(
-                    colors: [.clear, .clear, Brand.card.opacity(0.7), Brand.card],
+                    colors: [.clear, .clear, .black.opacity(0.55), .black.opacity(0.92)],
                     startPoint: .top, endPoint: .bottom
                 )
+
+                // Título, metadatos y botón de reproducir sobre la portada, como en
+                // la cabecera de un servicio de streaming.
+                VStack(alignment: .leading, spacing: 16) {
+                    TitleLogo(item: item, textFont: .system(size: 40, weight: .bold, design: .rounded))
+                        .shadow(color: .black.opacity(0.6), radius: 12, y: 4)
+                    MetaRow(item: item)
+
+                    if !qualityTiers.isEmpty || hasWebDL {
+                        HStack(spacing: 6) {
+                            ForEach(qualityTiers, id: \.self) { QualityBadge(label: $0.label) }
+                            if hasWebDL { QualityBadge(label: "WEB-DL") }
+                        }
+                    }
+
+                    if !item.genreNames.isEmpty {
+                        Text(item.genreNames.joined(separator: " · "))
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+
+                    if !isSeries {
+                        HStack(spacing: 12) {
+                            PlayButton(target: PlaybackTarget(postId: item.id, title: item.displayTitle)) {
+                                Label("Reproducir", systemImage: "play.fill")
+                                    .font(.headline)
+                                    .padding(.horizontal, 28)
+                                    .padding(.vertical, 14)
+                                    .background(.white, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                    .foregroundStyle(.black)
+                            }
+                            .buttonStyle(.plain)
+
+                            Button {
+                                downloadTarget = PlaybackTarget(postId: item.id, title: item.displayTitle)
+                            } label: {
+                                Image(systemName: "arrow.down")
+                                    .font(.headline)
+                                    .foregroundStyle(.white)
+                                    .frame(width: 50, height: 50)
+                                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                            .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+                    }
+
+                    if let tagline = item.tagline, !tagline.isEmpty {
+                        Text(tagline)
+                            .italic()
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                }
+                .padding(.horizontal, DetailCard.contentHorizontalPadding)
+                .padding(.bottom, 36)
             }
 
             VStack(alignment: .leading, spacing: 18) {
-                TitleLogo(item: item, textFont: .system(size: 32, weight: .bold, design: .rounded))
-                MetaRow(item: item)
-
-                if !qualityTiers.isEmpty || hasWebDL {
-                    HStack(spacing: 6) {
-                        ForEach(qualityTiers, id: \.self) { QualityBadge(label: $0.label) }
-                        if hasWebDL { QualityBadge(label: "WEB-DL") }
-                    }
-                }
-
-                if !item.genreNames.isEmpty {
-                    Text(item.genreNames.joined(separator: " · "))
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.55))
-                }
-
-                if !isSeries {
-                    HStack(spacing: 12) {
-                        PlayButton(target: PlaybackTarget(postId: item.id, title: item.displayTitle)) {
-                            Label("Reproducir", systemImage: "play.fill")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .background(.white, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                .foregroundStyle(.black)
-                        }
-                        .buttonStyle(.plain)
-
-                        Button {
-                            downloadTarget = PlaybackTarget(postId: item.id, title: item.displayTitle)
-                        } label: {
-                            Image(systemName: "arrow.down")
-                                .font(.headline)
-                                .foregroundStyle(.white)
-                                .frame(width: 50, height: 50)
-                                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        }
-                        .buttonStyle(.plain)
-                        .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    }
-                }
-
-                if let tagline = item.tagline, !tagline.isEmpty {
-                    Text(tagline)
-                        .italic()
-                        .foregroundStyle(.white.opacity(0.55))
-                }
                 if !overviewText.isEmpty {
                     Text(overviewText)
                         .font(.body)
@@ -1260,21 +1248,12 @@ struct DetailView: View {
 
                 if isSeries { episodesSection }
             }
-            .padding(.horizontal, 32)
+            .padding(.horizontal, DetailCard.contentHorizontalPadding)
             .padding(.top, 24)
             .padding(.bottom, 32)
         }
-        .frame(maxWidth: DetailCard.maxWidth)
-        .clipShape(RoundedRectangle(cornerRadius: DetailCard.cornerRadius, style: .continuous))
-        .glassEffect(
-            .regular.tint(Brand.card.opacity(0.5)),
-            in: RoundedRectangle(cornerRadius: DetailCard.cornerRadius, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DetailCard.cornerRadius, style: .continuous)
-                .stroke(.white.opacity(0.1), lineWidth: 1)
-        )
-        .shadow(color: .black.opacity(0.5), radius: 30, y: 16)
+        .frame(maxWidth: .infinity)
+        .background(Brand.card)
     }
 
     @ViewBuilder
