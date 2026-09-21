@@ -15,6 +15,8 @@ struct TMDBImages: Equatable {
     var logo: URL?
     var poster: URL?
     var backdrop: URL?
+    /// Portada vertical sin texto rotulado (para el hero del móvil); `nil` si no hay ninguna así.
+    var heroPoster: URL?
 }
 
 /// Tráiler de YouTube de un título.
@@ -272,7 +274,8 @@ final class TMDBService {
         return TMDBImages(
             logo: best(decoded.logos, excludeSVG: true),
             poster: best(decoded.posters, excludeSVG: false),
-            backdrop: best(decoded.backdrops, excludeSVG: false, textless: true, size: "w1280")
+            backdrop: best(decoded.backdrops, excludeSVG: false, textless: true, size: "w1280"),
+            heroPoster: best(decoded.posters.filter { $0.iso6391 == nil }, excludeSVG: true, size: "original")
         )
     }
 

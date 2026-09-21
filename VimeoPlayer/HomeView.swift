@@ -1905,7 +1905,12 @@ private struct HeroView: View {
             let (resolvedImages, resolvedDownloads) = await (images, downloads)
             qualityTiers = resolvedDownloads.qualityTiers
             hasWebDL = resolvedDownloads.contains(where: \.isWebDL)
+            #if os(iOS)
+            // En móvil el hero es vertical: se usa la portada sin texto (el logo va aparte encima).
+            tmdbBackdropURL = resolvedImages.heroPoster ?? resolvedImages.backdrop
+            #else
             tmdbBackdropURL = resolvedImages.backdrop
+            #endif
         }
     }
 }
