@@ -36,8 +36,8 @@ final class VODProxy: @unchecked Sendable {
 
     deinit { stop() }
 
-    static func start(source: URL) async throws -> VODProxy {
-        let fetcher = try await WebStreamFetcher.make()
+    static func start(source: URL, pageURL: URL) async throws -> VODProxy {
+        let fetcher = try await WebStreamFetcher.make(pageURL: pageURL)
         let master = try await fetcher.text(from: source)
         let (videoURL, audioURL) = try selectStreams(in: master, baseURL: source)
         async let videoPlaylist = fetcher.text(from: videoURL)

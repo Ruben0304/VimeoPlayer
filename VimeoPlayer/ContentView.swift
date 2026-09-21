@@ -1,12 +1,18 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var model = NativePlayerModel()
+    let embedURL: URL
+    @StateObject private var model: NativePlayerModel
+
+    init(embedURL: URL) {
+        self.embedURL = embedURL
+        _model = StateObject(wrappedValue: NativePlayerModel(embedURL: embedURL))
+    }
 
     var body: some View {
         Group {
             if model.useWebFallback {
-                VideoWebView(url: StreamResolver.pageURL)
+                VideoWebView(url: embedURL)
             } else if model.isReady {
                 NativePlayerView(player: model.player)
                     .overlay(alignment: .bottom) {
@@ -34,5 +40,5 @@ struct ContentView: View {
 }
 
 #Preview {
-    ContentView()
+    ContentView(embedURL: URL(string: "https://vimeos.net/embed-8m5djtdb04t1.html")!)
 }

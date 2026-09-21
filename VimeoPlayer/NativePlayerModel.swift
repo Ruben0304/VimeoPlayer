@@ -4,14 +4,19 @@ import JavaScriptCore
 @MainActor
 final class NativePlayerModel: ObservableObject {
     let player = AVPlayer()
+    let embedURL: URL
     @Published private(set) var isLoading = true
     @Published private(set) var isReady = false
     @Published private(set) var useWebFallback = false
     @Published private(set) var playbackError: String?
 
+    init(embedURL: URL) {
+        self.embedURL = embedURL
+    }
+
     func load() async {
         do {
-            let streamURL = try await StreamResolver.resolveStreamURL()
+            let streamURL = try await StreamResolver.resolveStreamURL(from: embedURL)
             let item = AVPlayerItem(url: streamURL)
             player.replaceCurrentItem(with: item)
             NotificationCenter.default.addObserver(forName: .AVPlayerItemFailedToPlayToEndTime, object: item, queue: .main) { [weak self] notification in
@@ -30,9 +35,7 @@ final class NativePlayerModel: ObservableObject {
 }
 
 enum StreamResolver {
-    static let pageURL = URL(string: "https://vimeos.net/embed-8m5djtdb04t1.html")!
-
-    static func resolveStreamURL() async throws -> URL {
+    static func resolveStreamURL(from pageURL: URL) async throws -> URL {
         let (data, response) = try await URLSession.shared.data(from: pageURL)
         guard let httpResponse = response as? HTTPURLResponse,
               (200..<300).contains(httpResponse.statusCode),

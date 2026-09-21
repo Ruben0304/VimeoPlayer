@@ -6,7 +6,7 @@ struct VideoWebView: UIViewRepresentable {
     let url: URL
 
     func makeUIView(context: Context) -> WKWebView {
-        makeWebView()
+        makeWebView(url: url)
     }
 
     func updateUIView(_ webView: WKWebView, context: Context) {
@@ -20,7 +20,7 @@ struct VideoWebView: NSViewRepresentable {
     let url: URL
 
     func makeNSView(context: Context) -> WKWebView {
-        makeWebView()
+        makeWebView(url: url)
     }
 
     func updateNSView(_ webView: WKWebView, context: Context) {
@@ -31,7 +31,7 @@ struct VideoWebView: NSViewRepresentable {
 }
 #endif
 
-private func makeWebView() -> WKWebView {
+private func makeWebView(url: URL) -> WKWebView {
     let configuration = WKWebViewConfiguration()
     #if os(iOS)
     configuration.allowsInlineMediaPlayback = true
@@ -42,6 +42,6 @@ private func makeWebView() -> WKWebView {
     #if os(macOS)
     webView.setValue(false, forKey: "drawsBackground")
     #endif
-    webView.load(URLRequest(url: URL(string: "https://vimeos.net/embed-8m5djtdb04t1.html")!))
+    webView.load(URLRequest(url: url))
     return webView
 }

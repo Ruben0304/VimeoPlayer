@@ -6,10 +6,16 @@ import WebKit
 @MainActor
 final class WebStreamFetcher: NSObject, WKNavigationDelegate {
     private let webView = WKWebView(frame: .zero)
+    private let pageURL: URL
     private var navigationContinuation: CheckedContinuation<Void, Error>?
 
-    static func make() async throws -> WebStreamFetcher {
-        let fetcher = WebStreamFetcher()
+    private init(pageURL: URL) {
+        self.pageURL = pageURL
+        super.init()
+    }
+
+    static func make(pageURL: URL) async throws -> WebStreamFetcher {
+        let fetcher = WebStreamFetcher(pageURL: pageURL)
         try await fetcher.prepare()
         return fetcher
     }
@@ -32,7 +38,7 @@ final class WebStreamFetcher: NSObject, WKNavigationDelegate {
         try await withCheckedThrowingContinuation { continuation in
             navigationContinuation = continuation
             webView.navigationDelegate = self
-            webView.load(URLRequest(url: StreamResolver.pageURL))
+            webView.load(URLRequest(url: pageURL))
         }
     }
 
@@ -48,7 +54,7 @@ final class WebStreamFetcher: NSObject, WKNavigationDelegate {
             body = "r.text()"
         }
         let script = """
-        fetch(\(jsonURL), { credentials: 'include', referrer: 'https://vimeos.net/embed-8m5djtdb04t1.html' })
+        fetch(\(jsonURL), { credentials: 'include', referrer: '\(pageURL.absoluteString)' })
           .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return \(body); })
         """
         guard let result = try await webView.callAsyncJavaScript(script, arguments: [:], in: nil, contentWorld: .page) else {
