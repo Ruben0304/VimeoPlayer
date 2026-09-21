@@ -554,6 +554,7 @@ struct TitleLogo: View {
     var textFont: Font = .system(size: 40, weight: .bold, design: .rounded)
     /// Permite diferir la petición (p. ej. páginas del hero que aún no toca mostrar).
     var enabled = true
+    var alignment: Alignment = .leading
 
     private enum LogoState: Equatable { case text, logo(URL) }
     @State private var state: LogoState = .text
@@ -578,7 +579,7 @@ struct TitleLogo: View {
                 }
             }
         }
-        .frame(maxWidth: 360, maxHeight: 130, alignment: .leading)
+        .frame(maxWidth: 360, maxHeight: 130, alignment: alignment)
         .shadow(color: .black.opacity(0.5), radius: 8)
         .accessibilityLabel(item.displayTitle)
         .task(id: TaskKey(id: item.id, enabled: enabled)) { await resolve() }
@@ -590,6 +591,7 @@ struct TitleLogo: View {
             .foregroundStyle(.white)
             .lineLimit(2)
             .minimumScaleFactor(0.7)
+            .multilineTextAlignment(alignment == .center ? .center : .leading)
     }
 
     private struct TaskKey: Hashable { let id: Int; let enabled: Bool }

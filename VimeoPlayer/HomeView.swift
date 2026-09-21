@@ -707,9 +707,13 @@ struct HomeView: View {
             .padding(.top, model.featuredItems.isEmpty ? 24 : 0)
             .padding(.bottom, 56)
         }
+        .coordinateSpace(name: HeroScroll.space)
         .refreshable { await model.load() }
     }
 }
+
+/// Espacio de coordenadas del scroll del inicio, para el parallax del hero.
+private enum HeroScroll { static let space = "homeScroll" }
 
 /// Grid con scroll infinito para el catálogo completo de una categoría.
 private struct CategoryGridView: View {
@@ -1787,54 +1791,72 @@ private struct HeroView: View {
     @State private var qualityTiers: [QualityTier] = []
     @State private var hasWebDL = false
 
+    #if os(iOS)
+    private let centered = true
+    private let heroHeight: CGFloat = 700
+    #else
+    private let centered = false
+    private let heroHeight: CGFloat = 740
+    #endif
+
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
+        ZStack(alignment: centered ? .bottom : .bottomLeading) {
             Group {
+            // Parallax: al subir, la imagen se queda atrás (va a la mitad de velocidad);
+            // al tirar hacia abajo, se estira.
             GeometryReader { proxy in
-                let minY = proxy.frame(in: .global).minY
-                let pulledDown = max(0, minY)
-                let scrolledUp = min(0, minY)
+                let minY = proxy.frame(in: .named(HeroScroll.space)).minY
+                let height = proxy.size.height
+                let pull = max(0, minY)
+                let extra = height * 0.3
+                let shift = min(max(0, -minY) * 0.5, extra)
                 Color(white: 0.05)
                     .overlay {
                         PosterImage(url: tmdbBackdropURL, category: .backdrop)
                             .aspectRatio(contentMode: .fill)
                     }
-                    .frame(width: proxy.size.width, height: proxy.size.height + pulledDown + abs(scrolledUp) * 0.3)
-                    .offset(y: minY > 0 ? -minY : minY * 0.3)
+                    .frame(width: proxy.size.width, height: height + extra + pull)
+                    .offset(y: -extra + shift - pull)
             }
             .clipped()
 
             LinearGradient(
-                colors: [.clear, .clear, Brand.background.opacity(0.5), Brand.background],
+                colors: centered
+                    ? [Brand.background.opacity(0.35), .clear, Brand.background.opacity(0.65), Brand.background]
+                    : [.clear, .clear, Brand.background.opacity(0.5), Brand.background],
                 startPoint: .top, endPoint: .bottom
             )
-            LinearGradient(
-                colors: [Brand.background.opacity(0.75), .clear],
-                startPoint: .leading, endPoint: .trailing
-            )
+            if !centered {
+                LinearGradient(
+                    colors: [Brand.background.opacity(0.75), .clear],
+                    startPoint: .leading, endPoint: .trailing
+                )
+            }
             }
             // Fundido a oscuro: la saliente se apaga primero y la entrante aparece después.
             .opacity(isActive ? 1 : 0)
             .animation(isActive ? .easeInOut(duration: 0.6).delay(0.3) : .easeInOut(duration: 0.4), value: isActive)
 
-            VStack(alignment: .leading, spacing: 14) {
-                TitleLogo(item: item, textFont: .system(size: 42, weight: .bold, design: .rounded), enabled: shouldLoad)
+            VStack(alignment: centered ? .center : .leading, spacing: 14) {
+                TitleLogo(item: item, textFont: .system(size: centered ? 34 : 42, weight: .bold, design: .rounded),
+                          enabled: shouldLoad, alignment: centered ? .center : .leading)
 
-                DetailMetaRow(item: item, tiers: qualityTiers, hasWebDL: hasWebDL)
+                DetailMetaRow(item: item, tiers: qualityTiers, hasWebDL: hasWebDL, fontSize: centered ? 14 : 17)
 
                 if !item.overview.isEmpty {
                     Text(item.overview)
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.7))
-                        .lineLimit(2)
-                        .frame(maxWidth: 520, alignment: .leading)
+                        .lineLimit(centered ? 3 : 2)
+                        .multilineTextAlignment(centered ? .center : .leading)
+                        .frame(maxWidth: 520, alignment: centered ? .center : .leading)
                 }
 
                 HStack(spacing: 14) {
                     PlayButton(target: PlaybackTarget(postId: item.id, title: item.displayTitle, watch: WatchInfo(item: item))) {
                         Label("Reproducir", systemImage: "play.fill")
                             .font(.headline)
-                            .padding(.horizontal, 26)
+                            .padding(.horizontal, centered ? 22 : 26)
                             .padding(.vertical, 12)
                             .foregroundStyle(.black)
                             .contentShape(Capsule())
@@ -1844,9 +1866,9 @@ private struct HeroView: View {
                     .pointerCursor()
 
                     NavigationLink(value: item) {
-                        Label("Más información", systemImage: "info.circle")
+                        Label(centered ? "Más info" : "Más información", systemImage: "info.circle")
                             .font(.headline)
-                            .padding(.horizontal, 22)
+                            .padding(.horizontal, centered ? 18 : 22)
                             .padding(.vertical, 12)
                             .foregroundStyle(.white)
                             .contentShape(Capsule())
@@ -1857,13 +1879,14 @@ private struct HeroView: View {
                 }
                 .padding(.top, 4)
             }
-            .padding(EdgeInsets(top: 20, leading: 36, bottom: 40, trailing: 36))
+            .padding(EdgeInsets(top: 20, leading: centered ? 20 : 36, bottom: centered ? 48 : 40, trailing: centered ? 20 : 36))
+            .frame(maxWidth: .infinity, alignment: centered ? .center : .leading)
             // El texto entra un poco después que la imagen, subiendo suavemente.
             .opacity(isActive ? 1 : 0)
             .offset(y: isActive ? 0 : 14)
             .animation(isActive ? .easeOut(duration: 0.6).delay(0.5) : .easeIn(duration: 0.3), value: isActive)
         }
-        .frame(height: 620)
+        .frame(height: heroHeight)
         .task(id: shouldLoad) {
             guard shouldLoad, tmdbBackdropURL == nil else { return }
             async let images = TMDBService.shared.images(for: item)
@@ -2006,6 +2029,7 @@ private struct DetailMetaRow: View {
     let item: CatalogItem
     let tiers: [QualityTier]
     let hasWebDL: Bool
+    var fontSize: CGFloat = 17
 
     var body: some View {
         HStack(spacing: 10) {
@@ -2030,7 +2054,7 @@ private struct DetailMetaRow: View {
             if let top = tiers.first { QualityBadge(label: top.label, filled: true) }
             if hasWebDL { QualityBadge(label: "WEB-DL") }
         }
-        .font(.system(size: 17, weight: .medium, design: .rounded))
+        .font(.system(size: fontSize, weight: .medium, design: .rounded))
     }
 }
 
