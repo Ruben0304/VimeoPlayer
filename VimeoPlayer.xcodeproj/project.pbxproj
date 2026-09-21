@@ -1,0 +1,69 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000000000000000000011 /* VimeoPlayerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000001 /* VimeoPlayerApp.swift */; };
+		A10000000000000000000012 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000002 /* ContentView.swift */; };
+		A10000000000000000000013 /* VideoWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000003 /* VideoWebView.swift */; };
+		A10000000000000000000014 /* NativePlayerModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000006 /* NativePlayerModel.swift */; };
+		A10000000000000000000015 /* NativePlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000007 /* NativePlayerView.swift */; };
+		A10000000000000000000016 /* VODProxy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000008 /* VODProxy.swift */; };
+		A10000000000000000000017 /* WebStreamFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000009 /* WebStreamFetcher.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A10000000000000000000001 /* VimeoPlayerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VimeoPlayerApp.swift; sourceTree = "<group>"; };
+		A10000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		A10000000000000000000003 /* VideoWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoWebView.swift; sourceTree = "<group>"; };
+		A10000000000000000000004 /* VimeoPlayer.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = VimeoPlayer.entitlements; sourceTree = "<group>"; };
+		A10000000000000000000005 /* VimeoPlayer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VimeoPlayer.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000006 /* NativePlayerModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlayerModel.swift; sourceTree = "<group>"; };
+		A10000000000000000000007 /* NativePlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlayerView.swift; sourceTree = "<group>"; };
+		A10000000000000000000008 /* VODProxy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VODProxy.swift; sourceTree = "<group>"; };
+		A10000000000000000000009 /* WebStreamFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebStreamFetcher.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A10000000000000000000021 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A10000000000000000000031 = {isa = PBXGroup; children = (A10000000000000000000032 /* VimeoPlayer */, A10000000000000000000033 /* Products */); sourceTree = "<group>"; };
+		A10000000000000000000032 /* VimeoPlayer */ = {isa = PBXGroup; children = (A10000000000000000000001 /* VimeoPlayerApp.swift */, A10000000000000000000002 /* ContentView.swift */, A10000000000000000000003 /* VideoWebView.swift */, A10000000000000000000006 /* NativePlayerModel.swift */, A10000000000000000000007 /* NativePlayerView.swift */, A10000000000000000000008 /* VODProxy.swift */, A10000000000000000000009 /* WebStreamFetcher.swift */, A10000000000000000000004 /* VimeoPlayer.entitlements */); path = VimeoPlayer; sourceTree = "<group>"; };
+		A10000000000000000000033 /* Products */ = {isa = PBXGroup; children = (A10000000000000000000005 /* VimeoPlayer.app */); name = Products; sourceTree = "<group>"; };
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A10000000000000000000041 /* VimeoPlayer */ = {isa = PBXNativeTarget; buildConfigurationList = A10000000000000000000051 /* Build configuration list for PBXNativeTarget "VimeoPlayer" */; buildPhases = (A10000000000000000000020 /* Sources */, A10000000000000000000021 /* Frameworks */, A10000000000000000000022 /* Resources */); buildRules = (); dependencies = (); name = VimeoPlayer; productName = VimeoPlayer; productReference = A10000000000000000000005 /* VimeoPlayer.app */; productType = "com.apple.product-type.application"; };
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A10000000000000000000061 /* Project object */ = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastUpgradeCheck = 2700; TargetAttributes = {A10000000000000000000041 = {CreatedOnToolsVersion = 27.0;};};}; buildConfigurationList = A10000000000000000000052 /* Build configuration list for PBXProject "VimeoPlayer" */; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = A10000000000000000000031; preferredProjectObjectVersion = 77; productRefGroup = A10000000000000000000033 /* Products */; projectDirPath = ""; projectRoot = ""; targets = (A10000000000000000000041 /* VimeoPlayer */); };
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A10000000000000000000022 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A10000000000000000000020 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000011 /* VimeoPlayerApp.swift in Sources */, A10000000000000000000012 /* ContentView.swift in Sources */, A10000000000000000000013 /* VideoWebView.swift in Sources */, A10000000000000000000014 /* NativePlayerModel.swift in Sources */, A10000000000000000000015 /* NativePlayerView.swift in Sources */, A10000000000000000000016 /* VODProxy.swift in Sources */, A10000000000000000000017 /* WebStreamFetcher.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A10000000000000000000071 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = dwarf; ENABLE_TESTABILITY = YES; GCC_C_LANGUAGE_STANDARD = gnu17; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MACOSX_DEPLOYMENT_TARGET = 14.0; ONLY_ACTIVE_ARCH = YES; SDKROOT = auto; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; name = Debug; };
+		A10000000000000000000072 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; GCC_C_LANGUAGE_STANDARD = gnu17; IPHONEOS_DEPLOYMENT_TARGET = 17.0; MACOSX_DEPLOYMENT_TARGET = 14.0; SDKROOT = auto; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx"; SWIFT_COMPILATION_MODE = wholemodule; }; name = Release; };
+		A10000000000000000000073 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_ENTITLEMENTS = VimeoPlayer/VimeoPlayer.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = "Vimeo Player"; INFOPLIST_KEY_UILaunchScreen_Generation = YES; INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../Frameworks"); MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.ruben.vimeoplayer; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
+		A10000000000000000000074 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_ENTITLEMENTS = VimeoPlayer/VimeoPlayer.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_CFBundleDisplayName = "Vimeo Player"; INFOPLIST_KEY_UILaunchScreen_Generation = YES; INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../Frameworks"); MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.ruben.vimeoplayer; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Release; };
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A10000000000000000000051 /* Build configuration list for PBXNativeTarget "VimeoPlayer" */ = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000073 /* Debug */, A10000000000000000000074 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		A10000000000000000000052 /* Build configuration list for PBXProject "VimeoPlayer" */ = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000071 /* Debug */, A10000000000000000000072 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+/* End XCConfigurationList section */
+	};
+	rootObject = A10000000000000000000061 /* Project object */;
+}
