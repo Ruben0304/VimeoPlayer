@@ -359,6 +359,7 @@ struct HomeView: View {
     @State private var query = ""
     @State private var selection: SidebarCategory? = .home
     @State private var showingSettings = false
+    @State private var isSidebarOpen = true
     @StateObject private var router = NavigationRouter()
 
     @StateObject private var model = HomeViewModel()
@@ -368,44 +369,64 @@ struct HomeView: View {
     @StateObject private var posterTransition = PosterTransition()
 
     var body: some View {
-        ZStack {
-            NavigationSplitView {
-                sidebar
-            } detail: {
-                NavigationStack(path: $router.path) {
-                    ZStack(alignment: .topTrailing) {
-                        AppBackground()
+        // Sin NavigationSplitView: la sidebar es una capa custom que flota
+        // sobre el contenido a pantalla completa, como en una app de streaming.
+        ZStack(alignment: .topLeading) {
+            NavigationStack(path: $router.path) {
+                ZStack(alignment: .topTrailing) {
+                    AppBackground()
 
-                        catalog
+                    catalog
 
-                        // Tarjeta flotante con blur: el catálogo se ve (desenfocado) detrás.
-                        if let presented = posterTransition.presentedItem {
-                            DetailView(item: presented, onDismiss: { posterTransition.dismiss() })
-                                .transition(.opacity)
-                        }
+                    // Tarjeta flotante con blur: el catálogo se ve (desenfocado) detrás.
+                    if let presented = posterTransition.presentedItem {
+                        DetailView(item: presented, onDismiss: { posterTransition.dismiss() })
+                            .transition(.opacity)
                     }
-                    // Para que la animación de expansión sepa exactamente dónde
-                    // termina la tarjeta de detalle (excluye el ancho del sidebar).
-                    .background(
-                        GeometryReader { geo in
-                            Color.clear
-                                .onAppear { posterTransition.contentFrame = geo.frame(in: .global) }
-                                .onChange(of: geo.frame(in: .global)) { _, newValue in
-                                    posterTransition.contentFrame = newValue
-                                }
-                        }
-                    )
-                    .navigationDestination(for: CatalogItem.self) { DetailView(item: $0) }
-                    .navigationDestination(for: PlaybackTarget.self) { PlayerLoaderView(target: $0) }
-                    .hidingNavigationBar()
-                    .ignoresSafeArea(edges: .top)
+                }
+                // Para que la animación de expansión sepa exactamente dónde
+                // termina la tarjeta de detalle.
+                .background(
+                    GeometryReader { geo in
+                        Color.clear
+                            .onAppear { posterTransition.contentFrame = geo.frame(in: .global) }
+                            .onChange(of: geo.frame(in: .global)) { _, newValue in
+                                posterTransition.contentFrame = newValue
+                            }
+                    }
+                )
+                .navigationDestination(for: CatalogItem.self) { DetailView(item: $0) }
+                .navigationDestination(for: PlaybackTarget.self) { PlayerLoaderView(target: $0) }
+                .hidingNavigationBar()
+                .ignoresSafeArea(edges: .top)
+            }
+
+            // La sidebar solo tiene sentido en las pantallas de exploración
+            // (Inicio/Buscar/categorías): en el detalle a pantalla completa y
+            // en el reproductor ya hay su propio control de cierre en la misma
+            // esquina, así que la ocultamos por completo para no chocar con él.
+            if isSidebarAvailable {
+                // La sidebar es un overlay tipo drawer: flota sobre la vista que
+                // esté abierta con un scrim oscuro detrás, no reserva espacio fijo.
+                if isSidebarOpen {
+                    Color.black.opacity(0.55)
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture { closeSidebar() }
+                        .transition(.opacity)
+
+                    sidebar
+                        .transition(.move(edge: .leading).combined(with: .opacity))
+                } else {
+                    sidebarReopenButton
+                        .transition(.opacity)
                 }
             }
-            .navigationSplitViewStyle(.balanced)
 
             // El póster tocado crece hasta cubrir toda la ventana mientras se abre la película.
             ExpandingPosterOverlay(transition: posterTransition)
         }
+        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isSidebarOpen)
         .environmentObject(posterTransition)
         .environmentObject(router)
         .environmentObject(recentlyViewed)
@@ -418,72 +439,72 @@ struct HomeView: View {
             router.path = NavigationPath()
             if selection != .search { query = "" }
         }
+        // Si el usuario entra a un detalle o al reproductor con la sidebar
+        // abierta (p. ej. desde el teclado), la cerramos: al volver a la
+        // pantalla de exploración debe reaparecer en su estado normal, no
+        // "atascada" encima de una vista que ya tiene su propio cierre.
+        .onChange(of: isSidebarAvailable) { _, available in
+            if !available { isSidebarOpen = false }
+        }
         #if os(iOS)
         .fullScreenCover(item: $coordinator.target) { PlayerCover(target: $0) }
         #endif
     }
 
-    /// Sidebar de categorías: material vibrante nativo, como los de macOS, con el
-    /// buscador integrado arriba en vez de flotando sobre el contenido.
+    /// La sidebar solo aplica en las pantallas de exploración: sin nada
+    /// presentado encima del catálogo y sin nada apilado en la navegación.
+    private var isSidebarAvailable: Bool {
+        router.path.isEmpty && posterTransition.presentedItem == nil
+    }
+
+    private var sidebarConfig: SidebarConfiguration { .default }
+
+    /// Navegación custom que flota sobre el contenido (sin `NavigationSplitView`
+    /// ni `List`), con magnificación tipo "vertical carousel" controlada por el cursor.
     private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            Text("LaMovie")
-                .font(.system(.title3, design: .rounded).weight(.bold))
-                .foregroundStyle(.white)
-                .padding(.horizontal, 18)
-                .padding(.top, sidebarTopInset)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("CATEGORÍAS")
-                    .font(.caption2.weight(.bold))
-                    .tracking(1.2)
-                    .foregroundStyle(.white.opacity(0.4))
-                    .padding(.horizontal, 14)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(SidebarCategory.allCases) { category in
-                        SidebarRow(category: category, isSelected: activeCategory == category) {
-                            selection = category
-                        }
-                    }
-                }
-            }
-
-            Spacer()
-
+        StreamingSidebar(
+            appName: "LaMovie",
+            sectionLabel: "CATEGORÍAS",
+            items: SidebarCategory.allCases.map { category in
+                SidebarItemModel(id: category.id, title: category.title)
+            },
+            selectedID: activeCategory.id,
+            config: sidebarConfig,
+            onSelect: { item in
+                guard let category = SidebarCategory(rawValue: item.id) else { return }
+                selection = category
+                closeSidebar()
+            },
+            onClose: { closeSidebar() }
+        ) {
             Button { showingSettings = true } label: {
-                HStack(spacing: 10) {
-                    Image(systemName: "gearshape")
-                        .font(.system(size: 14, weight: .semibold))
-                        .frame(width: 20)
+                HStack(spacing: 0) {
                     Text("Ajustes")
-                        .font(.system(size: 13.5))
+                        .font(.system(size: 15))
                     Spacer(minLength: 0)
                 }
-                .foregroundStyle(.white.opacity(0.6))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .foregroundStyle(.white.opacity(0.5))
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .padding(.horizontal, 10)
-            .padding(.bottom, 12)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.ultraThinMaterial)
-        .navigationSplitViewColumnWidth(min: 210, ideal: 240, max: 280)
         .sheet(isPresented: $showingSettings) { SettingsView() }
     }
 
-    private var sidebarTopInset: CGFloat {
-        #if os(macOS)
-        36
-        #else
-        16
-        #endif
+    /// Botón flotante para reabrir la sidebar cuando está cerrada; misma
+    /// posición/inset que el botón de cerrar dentro de la sidebar, para que
+    /// el ojo no salte al alternar entre ambos estados.
+    private var sidebarReopenButton: some View {
+        SidebarChromeButton(style: .menu, size: sidebarConfig.closeButtonSize) {
+            isSidebarOpen = true
+        }
+        .padding(.leading, sidebarConfig.horizontalInset)
+        .padding(.top, sidebarConfig.topInset)
     }
 
+    private func closeSidebar() {
+        isSidebarOpen = false
+    }
 
     /// Solo la portada de Inicio depende de `HomeViewModel`; el resto de categorías
     /// muestran su propio catálogo completo paginado vía `CategoryViewModel`.
@@ -624,47 +645,6 @@ private enum SidebarCategory: String, CaseIterable, Identifiable, Hashable {
         case .series: "tv"
         case .animes: "sparkles.tv"
         }
-    }
-}
-
-/// Fila del sidebar con foco tipo tvOS: escala y cristal al seleccionar/pasar el cursor.
-private struct SidebarRow: View {
-    let category: SidebarCategory
-    let isSelected: Bool
-    let action: () -> Void
-
-    @State private var hovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: category.icon)
-                    .font(.system(size: 14, weight: .semibold))
-                    .frame(width: 20)
-                Text(category.title)
-                    .font(.system(size: 13.5, weight: isSelected ? .semibold : .regular))
-                Spacer(minLength: 0)
-            }
-            .foregroundStyle(isSelected ? .white : .white.opacity(hovering ? 0.85 : 0.6))
-            .padding(.horizontal, 10)
-            .padding(.vertical, 7)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .background {
-            if isSelected {
-                Color.clear
-                    .glassEffect(.regular.tint(.white.opacity(0.35)), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            } else if hovering {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(.white.opacity(0.06))
-            }
-        }
-        .padding(.horizontal, 10)
-        .animation(.easeOut(duration: 0.12), value: hovering)
-        .animation(.easeOut(duration: 0.15), value: isSelected)
-        .onHover { hovering = $0 }
     }
 }
 
