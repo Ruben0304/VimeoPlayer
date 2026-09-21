@@ -323,7 +323,7 @@ enum QualityTier: Int, Comparable, Hashable {
         switch self {
         case .hd: "HD"
         case .fullHD: "FULL HD"
-        case .uhd4K: "4K"
+        case .uhd4K: "4K HDR"
         }
     }
 
@@ -395,6 +395,8 @@ struct PlaybackTarget: Hashable, Identifiable {
     let title: String
     /// Si está, en vez del stream de la web se reproduce el RAR de MediaFire (solo macOS).
     var mediaFire: URL?
+    /// Si está, el reproductor guarda el progreso (Continuar viendo) y retoma desde donde se dejó.
+    var watch: WatchInfo?
 
     var id: String { "\(postId)-\(mediaFire?.absoluteString ?? "stream")" }
 }

@@ -20,8 +20,11 @@ final class NativePlayerModel: ObservableObject {
     private var itemStatus: AnyCancellable?
     private var hasStartedPlaying = false
 
-    init(embedURL: URL) {
+    private let progress: WatchProgressReporter?
+
+    init(embedURL: URL, target: PlaybackTarget? = nil) {
         self.embedURL = embedURL
+        progress = WatchProgressReporter(target: target)
     }
 
     func load() async {
@@ -35,6 +38,9 @@ final class NativePlayerModel: ObservableObject {
             self.proxy = proxy
             qualities = proxy.qualities
             player.replaceCurrentItem(with: await makeItem(quality: nil))
+            if let resume = progress?.resumePosition {
+                await player.seek(to: CMTime(seconds: resume, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+            }
             isReady = true
             player.play()
             startStatusUpdates()
@@ -48,6 +54,7 @@ final class NativePlayerModel: ObservableObject {
 
     /// Detiene la reproducción y la descarga en segundo plano, y borra la caché de disco.
     func stop() {
+        saveProgress(force: true)
         statusTask?.cancel()
         statusTask = nil
         player.pause()
@@ -111,6 +118,11 @@ final class NativePlayerModel: ObservableObject {
         item.select(option, in: group)
     }
 
+    private func saveProgress(force: Bool = false) {
+        guard let item = player.currentItem else { return }
+        progress?.report(position: player.currentTime().seconds, duration: item.duration.seconds, force: force)
+    }
+
     private func startStatusUpdates() {
         statusTask?.cancel()
         statusTask = Task { [weak self] in
@@ -118,6 +130,7 @@ final class NativePlayerModel: ObservableObject {
                 guard let self, let proxy = self.proxy else { return }
                 let time = self.player.currentTime().seconds
                 self.buffer = await proxy.status(at: time.isFinite ? time : 0)
+                self.saveProgress()
                 try? await Task.sleep(for: .seconds(1))
             }
         }

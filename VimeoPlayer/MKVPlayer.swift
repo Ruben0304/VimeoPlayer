@@ -38,6 +38,8 @@ final class MKVPlayerModel: ObservableObject {
     var qualityURLProvider: (@Sendable (QualityOption) async -> URL)?
 
     private var pendingSeek: Double?
+    /// Guarda el progreso para "Continuar viendo" cuando el título lo pide.
+    var progress: WatchProgressReporter?
 
     private var updateTask: Task<Void, Never>?
     private var lastDownloaded: Int64 = 0
@@ -68,6 +70,7 @@ final class MKVPlayerModel: ObservableObject {
     }
 
     func stop() {
+        if duration > 0 { progress?.report(position: currentTime, duration: duration, force: true) }
         updateTask?.cancel()
         updateTask = nil
         player.stop()
@@ -128,6 +131,7 @@ final class MKVPlayerModel: ObservableObject {
         currentTime = Double(player.time.intValue) / 1000
         let length = Double(player.media?.length.intValue ?? 0) / 1000
         if length > 0 { duration = length }
+        if state == .playing, pendingSeek == nil, duration > 0 { progress?.report(position: currentTime, duration: duration) }
         if let target = pendingSeek, state == .playing, length > 0 {
             pendingSeek = nil
             player.time = VLCTime(int: Int32(target * 1000))
@@ -416,6 +420,7 @@ struct RARPlayerView: View {
 /// Stream normal (con el proxy local) reproducido en VLC, para quien prefiera VLC a todo.
 struct VLCStreamPlayerView: View {
     let embedURL: URL
+    var target: PlaybackTarget?
     @Binding var mode: PlaybackMode
 
     @StateObject private var model = MKVPlayerModel()
@@ -456,7 +461,9 @@ struct VLCStreamPlayerView: View {
                 let status = await proxy.status(at: time)
                 return status.isComplete ? "Todo descargado" : "Buffer \(Int(status.bufferedAhead)) s · \(Int(status.cachedFraction * 100)) %"
             }
-            model.play(url: await proxy.masterURL(quality: nil))
+            let reporter = WatchProgressReporter(target: target)
+            model.progress = reporter
+            model.play(url: await proxy.masterURL(quality: nil), startAt: reporter?.resumePosition)
         } catch {
             failed = true
         }
