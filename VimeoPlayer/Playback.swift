@@ -10,7 +10,7 @@ struct PlayerLoaderView: View {
     var body: some View {
         Group {
             if let embedURL {
-                ContentView(embedURL: embedURL)
+                ContentView(embedURL: embedURL, target: target)
             } else if failed {
                 VStack(spacing: 12) {
                     Image(systemName: "exclamationmark.triangle").font(.largeTitle)

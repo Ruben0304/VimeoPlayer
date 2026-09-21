@@ -3,6 +3,7 @@ import SwiftUI
 /// Elige entre el reproductor acelerado (proxy local) y el directo (reproductor web de la fuente).
 struct ContentView: View {
     let embedURL: URL
+    var target: PlaybackTarget?
     @AppStorage(PlaybackMode.storageKey) private var mode = PlaybackMode.accelerated
     @AppStorage(PlaybackSettings.preferVLCKey) private var preferVLC = false
 
@@ -11,12 +12,12 @@ struct ContentView: View {
         case .accelerated:
             #if os(macOS)
             if preferVLC {
-                VLCStreamPlayerView(embedURL: embedURL, mode: $mode)
+                VLCStreamPlayerView(embedURL: embedURL, target: target, mode: $mode)
             } else {
-                AcceleratedPlayerView(embedURL: embedURL, mode: $mode)
+                AcceleratedPlayerView(embedURL: embedURL, target: target, mode: $mode)
             }
             #else
-            AcceleratedPlayerView(embedURL: embedURL, mode: $mode)
+            AcceleratedPlayerView(embedURL: embedURL, target: target, mode: $mode)
             #endif
         case .direct:
             VideoWebView(url: embedURL)
@@ -43,10 +44,10 @@ private struct AcceleratedPlayerView: View {
     @Binding var mode: PlaybackMode
     @StateObject private var model: NativePlayerModel
 
-    init(embedURL: URL, mode: Binding<PlaybackMode>) {
+    init(embedURL: URL, target: PlaybackTarget?, mode: Binding<PlaybackMode>) {
         self.embedURL = embedURL
         _mode = mode
-        _model = StateObject(wrappedValue: NativePlayerModel(embedURL: embedURL))
+        _model = StateObject(wrappedValue: NativePlayerModel(embedURL: embedURL, target: target))
     }
 
     var body: some View {

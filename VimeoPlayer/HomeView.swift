@@ -1,4 +1,6 @@
 import SwiftUI
+import CryptoKit
+import Translation
 
 struct Shelf: Identifiable {
     let id: String
@@ -95,24 +97,88 @@ final class SearchViewModel: ObservableObject {
     enum State: Equatable { case idle, tooShort, loading, results([CatalogItem]), empty, failed }
 
     @Published private(set) var state = State.idle
+    /// Títulos de TMDB afines a lo escrito, con sus nombres alternativos.
+    @Published private(set) var suggestions: [TitleSuggestion] = []
+    /// Nombre alternativo con el que se encontraron resultados cuando el escrito no dio ninguno.
+    @Published private(set) var fallbackName: String?
 
     /// Se llama con cada cambio del texto; la tarea anterior se cancela sola.
     func run(_ raw: String) async {
         let query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if query.isEmpty { state = .idle; return }
-        if query.count < 3 { state = .tooShort; return }
+        if query.isEmpty { state = .idle; suggestions = []; fallbackName = nil; return }
+        if query.count < 3 { state = .tooShort; suggestions = []; fallbackName = nil; return }
 
         state = .loading
         try? await Task.sleep(for: .milliseconds(400))
         if Task.isCancelled { return }
+
+        // La búsqueda se hace con lo escrito y con su traducción al inglés, y se combinan.
+        // TMDB va en paralelo: no debe retrasar ni romper la búsqueda del catálogo.
+        let translated = await QueryTranslator.shared.english(query)
+        if Task.isCancelled { return }
+        let queries = [query] + [translated].compactMap { $0 }
+
+        async let tmdb = Self.suggestions(for: queries)
         do {
-            let items = try await LaMovieAPI.search(query)
+            var items = try await Self.catalogSearch(queries)
+            let found = await tmdb
+            if Task.isCancelled { return }
+            suggestions = found
+            fallbackName = nil
+
+            // Sin resultados: se prueban los otros nombres del título en el catálogo.
+            if items.isEmpty {
+                var tried = Set(queries.map { $0.lowercased() })
+                for name in found.flatMap(\.allNames) where name.count >= 3 && tried.insert(name.lowercased()).inserted {
+                    if let hits = try? await LaMovieAPI.search(name), !hits.isEmpty {
+                        items = hits
+                        fallbackName = name
+                        break
+                    }
+                    if Task.isCancelled { return }
+                }
+            }
             if Task.isCancelled { return }
             state = items.isEmpty ? .empty : .results(items)
         } catch {
             if Task.isCancelled { return }
+            suggestions = await tmdb
             state = .failed
         }
+    }
+
+    /// Resultados del catálogo para todas las variantes, sin repetir y con la escrita primero.
+    /// Falla solo si fallan todas.
+    private static func catalogSearch(_ queries: [String]) async throws -> [CatalogItem] {
+        var results: [Result<[CatalogItem], Error>] = []
+        await withTaskGroup(of: (Int, Result<[CatalogItem], Error>).self) { group in
+            for (index, query) in queries.enumerated() {
+                group.addTask { (index, await Result { try await LaMovieAPI.search(query) }) }
+            }
+            var indexed: [(Int, Result<[CatalogItem], Error>)] = []
+            for await entry in group { indexed.append(entry) }
+            results = indexed.sorted { $0.0 < $1.0 }.map(\.1)
+        }
+        if results.allSatisfy({ if case .failure = $0 { true } else { false } }), let first = results.first {
+            _ = try first.get()
+        }
+        var seen = Set<Int>()
+        return results.flatMap { (try? $0.get()) ?? [] }.filter { seen.insert($0.id).inserted }
+    }
+
+    /// Sugerencias de TMDB para todas las variantes, sin repetir y con las de lo escrito primero.
+    private static func suggestions(for queries: [String]) async -> [TitleSuggestion] {
+        var lists: [[TitleSuggestion]] = []
+        await withTaskGroup(of: (Int, [TitleSuggestion]).self) { group in
+            for (index, query) in queries.enumerated() {
+                group.addTask { (index, await TMDBService.shared.suggestions(for: query)) }
+            }
+            var indexed: [(Int, [TitleSuggestion])] = []
+            for await entry in group { indexed.append(entry) }
+            lists = indexed.sorted { $0.0 < $1.0 }.map(\.1)
+        }
+        var seen = Set<Int>()
+        return Array(lists.flatMap { $0 }.filter { seen.insert($0.id * 10 + ($0.kind == .movies ? 1 : 2)).inserted }.prefix(5))
     }
 }
 
@@ -172,27 +238,217 @@ private struct AppBackground: View {
 }
 
 #if os(macOS)
-private typealias PlatformImage = NSImage
+typealias PlatformImage = NSImage
 #else
-private typealias PlatformImage = UIImage
+typealias PlatformImage = UIImage
 #endif
 
-/// Cache en memoria por URL: evita que el póster/backdrop vuelva a descargarse (y
-/// parpadee) cuando pasa de la tarjeta a la animación de expansión y a la ficha.
-@MainActor
-private final class ImageCache {
-    static let shared = ImageCache()
-    private let cache = NSCache<NSURL, PlatformImage>()
+/// Tipo de imagen en la caché: cada uno vive en su propia subcarpeta, para poder ver
+/// cuánto ocupa y borrarlo por separado.
+enum ImageCategory: String, CaseIterable, Identifiable {
+    case poster, backdrop, logo, platform, cast, episode
+    /// Archivos de versiones anteriores, sin clasificar (en la raíz de la caché).
+    case other
 
-    func image(for url: URL) -> PlatformImage? { cache.object(forKey: url as NSURL) }
-    func insert(_ image: PlatformImage, for url: URL) { cache.setObject(image, forKey: url as NSURL) }
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .poster: "Portadas"
+        case .backdrop: "Fondos"
+        case .logo: "Logos de título"
+        case .platform: "Plataformas"
+        case .cast: "Reparto"
+        case .episode: "Episodios"
+        case .other: "Sin clasificar"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .poster: "rectangle.portrait"
+        case .backdrop: "photo"
+        case .logo: "textformat"
+        case .platform: "play.tv"
+        case .cast: "person.2"
+        case .episode: "list.and.film"
+        case .other: "questionmark.folder"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .poster: .blue
+        case .backdrop: .purple
+        case .logo: .orange
+        case .platform: .green
+        case .cast: .pink
+        case .episode: .teal
+        case .other: .gray
+        }
+    }
 }
 
-/// Componente de imagen remota con cache en memoria: una vez cargada, reaparece al
-/// instante en cualquier otra vista que pida la misma URL, sin volver a mostrar el
-/// placeholder — clave para que la transición póster → ficha no parpadee.
-private struct PosterImage: View {
+struct CacheUsage: Equatable {
+    var count = 0
+    var bytes: Int64 = 0
+}
+
+/// Caché de imágenes en dos niveles: memoria (`NSCache`) y disco (carpeta Caches de la app),
+/// para que portadas, fondos, logos y fotos no se vuelvan a descargar ni al reabrir la app.
+/// Es independiente de las cabeceras HTTP del servidor.
+@MainActor
+final class ImageCache {
+    static let shared = ImageCache()
+    private let memory = NSCache<NSURL, PlatformImage>()
+    private let root: URL = {
+        let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        let dir = base.appendingPathComponent("ImageCache", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }()
+
+    /// Solo la memoria: respuesta inmediata para pintar sin parpadeo.
+    func image(for url: URL) -> PlatformImage? { memory.object(forKey: url as NSURL) }
+    func insert(_ image: PlatformImage, for url: URL) { memory.setObject(image, forKey: url as NSURL) }
+
+    private nonisolated static func folder(_ category: ImageCategory, in root: URL) -> URL {
+        // `.other` es la propia raíz (donde estaban los archivos antiguos).
+        category == .other ? root : root.appendingPathComponent(category.rawValue, isDirectory: true)
+    }
+
+    private func file(for url: URL, category: ImageCategory) -> URL {
+        let folder = Self.folder(category, in: root)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let hash = SHA256.hash(data: Data(url.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined()
+        return folder.appendingPathComponent(hash)
+    }
+
+    /// Imágenes y bytes en disco, por categoría.
+    func usage() async -> [ImageCategory: CacheUsage] {
+        let root = root
+        return await Task.detached {
+            var result: [ImageCategory: CacheUsage] = [:]
+            for category in ImageCategory.allCases {
+                let files = (try? FileManager.default.contentsOfDirectory(
+                    at: Self.folder(category, in: root), includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey])) ?? []
+                var usage = CacheUsage()
+                for file in files {
+                    let values = try? file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
+                    guard values?.isRegularFile == true else { continue }   // salta las subcarpetas
+                    usage.count += 1
+                    usage.bytes += Int64(values?.fileSize ?? 0)
+                }
+                result[category] = usage
+            }
+            return result
+        }.value
+    }
+
+    /// Borra de disco las imágenes de esas categorías sin usar desde hace más de `age`
+    /// segundos, o todas si es `nil`. Devuelve los bytes liberados.
+    @discardableResult
+    func clear(_ categories: Set<ImageCategory>, olderThan age: TimeInterval?) async -> Int64 {
+        memory.removeAllObjects()
+        let root = root
+        return await Task.detached {
+            let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey]
+            let limit = age.map { Date().addingTimeInterval(-$0) }
+            var freed: Int64 = 0
+            for category in categories {
+                let files = (try? FileManager.default.contentsOfDirectory(
+                    at: Self.folder(category, in: root), includingPropertiesForKeys: keys)) ?? []
+                for file in files {
+                    let values = try? file.resourceValues(forKeys: Set(keys))
+                    guard values?.isRegularFile == true else { continue }
+                    if let limit, let modified = values?.contentModificationDate, modified >= limit { continue }
+                    if (try? FileManager.default.removeItem(at: file)) != nil {
+                        freed += Int64(values?.fileSize ?? 0)
+                    }
+                }
+            }
+            return freed
+        }.value
+    }
+
+    /// Memoria → disco → red (y se guarda en disco, en la carpeta de su categoría).
+    func load(_ url: URL, category: ImageCategory) async -> PlatformImage? {
+        if let cached = image(for: url) { return cached }
+
+        let file = file(for: url, category: category)
+        let stored = await Task.detached { () -> Data? in
+            guard let data = try? Data(contentsOf: file) else { return nil }
+            // Se anota el último uso: "borrar lo antiguo" borra lo que lleva tiempo sin verse.
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: file.path)
+            return data
+        }.value
+        if let data = stored, let loaded = PlatformImage(data: data) {
+            insert(loaded, for: url)
+            return loaded
+        }
+
+        guard let (data, response) = try? await URLSession.shared.data(from: url),
+              (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
+              let loaded = PlatformImage(data: data) else { return nil }
+        insert(loaded, for: url)
+        Task.detached { try? data.write(to: file, options: .atomic) }
+        return loaded
+    }
+}
+
+/// Como `AsyncImage`, pero pasando por `ImageCache` (memoria + disco).
+struct CachedAsyncImage<Content: View>: View {
     let url: URL?
+    let category: ImageCategory
+    @ViewBuilder let content: (AsyncImagePhase) -> Content
+    @State private var phase: AsyncImagePhase = .empty
+
+    init(url: URL?, category: ImageCategory, @ViewBuilder content: @escaping (AsyncImagePhase) -> Content) {
+        self.url = url
+        self.category = category
+        self.content = content
+        // Si ya está en memoria se pinta en el primer fotograma, sin parpadeo.
+        if let url, let cached = MainActor.assumeIsolated({ ImageCache.shared.image(for: url) }) {
+            _phase = State(initialValue: .success(Self.swiftUIImage(cached)))
+        }
+    }
+
+    var body: some View {
+        content(phase)
+            .task(id: url) { await load() }
+    }
+
+    private func load() async {
+        guard let url else { phase = .empty; return }
+        if let loaded = await ImageCache.shared.load(url, category: category) {
+            phase = .success(Self.swiftUIImage(loaded))
+        } else if !Task.isCancelled {
+            phase = .failure(URLError(.cannotLoadFromNetwork))
+        }
+    }
+
+    private static func swiftUIImage(_ image: PlatformImage) -> Image {
+        #if os(macOS)
+        Image(nsImage: image)
+        #else
+        Image(uiImage: image)
+        #endif
+    }
+}
+
+extension CachedAsyncImage {
+    /// Misma forma que `AsyncImage(url:) { image in … } placeholder: { … }`.
+    init<I: View, P: View>(url: URL?, category: ImageCategory, @ViewBuilder content: @escaping (Image) -> I, @ViewBuilder placeholder: @escaping () -> P)
+    where Content == _ConditionalContent<I, P> {
+        self.init(url: url, category: category) { phase in
+            if let image = phase.image { content(image) } else { placeholder() }
+        }
+    }
+}
+
+struct PosterImage: View {
+    let url: URL?
+    var category: ImageCategory = .poster
     @State private var image: PlatformImage?
 
     var body: some View {
@@ -216,22 +472,25 @@ private struct PosterImage: View {
             image = cached
             return
         }
-        guard let (data, _) = try? await URLSession.shared.data(from: url),
-              let loaded = PlatformImage(data: data) else { return }
-        ImageCache.shared.insert(loaded, for: url)
-        image = loaded
+        if let loaded = await ImageCache.shared.load(url, category: category) { image = loaded }
     }
 }
 
-/// Ruta de navegación compartida: permite que `PosterCard` empuje la navegación
-/// desde dentro del mismo botón que dispara la animación de expansión.
+/// Descarga una imagen a la caché en memoria (sin mostrarla) para que aparezca al instante.
+@MainActor
+private func prefetchImage(_ url: URL?, category: ImageCategory) async {
+    guard let url else { return }
+    _ = await ImageCache.shared.load(url, category: category)
+}
+
+/// Ruta de navegación compartida: permite que `PosterCard` empuje la ficha en el mismo
+/// `NavigationStack` que usa "Más información" del hero.
 @MainActor
 final class NavigationRouter: ObservableObject {
     @Published var path = NavigationPath()
 }
 
-/// Dimensiones de la tarjeta de detalle, compartidas con la animación de expansión
-/// para que la portada termine exactamente donde `DetailView` la va a mostrar.
+/// Dimensiones de la ficha de detalle.
 enum DetailCard {
     static let cornerRadius: CGFloat = 0
     static let topMargin: CGFloat = 0
@@ -239,123 +498,12 @@ enum DetailCard {
     static let contentHorizontalPadding: CGFloat = 48
 }
 
-/// Coordina la animación de "expandir" un póster hasta la tarjeta de detalle al abrirlo.
-@MainActor
-final class PosterTransition: ObservableObject {
-    struct Snapshot {
-        let posterURL: URL?
-        let backdropURL: URL?
-        let frame: CGRect
-    }
-
-    @Published fileprivate(set) var snapshot: Snapshot?
-    /// La ficha se muestra como tarjeta flotante sobre el catálogo, no empujada.
-    @Published private(set) var presentedItem: CatalogItem?
-    /// Área visible del panel de contenido (sin el sidebar), en coordenadas globales.
-    @Published var contentFrame: CGRect = .zero
-
-    func open(_ item: CatalogItem, posterURL: URL?, backdropURL: URL?, frame: CGRect) {
-        guard frame != .zero else { return }
-        snapshot = Snapshot(posterURL: posterURL, backdropURL: backdropURL, frame: frame)
-        // El scrim y la tarjeta se atenúan junto con el crecimiento del póster, en
-        // vez de aparecer de golpe detrás de él.
-        withAnimation(.easeOut(duration: 0.4)) {
-            presentedItem = item
-        }
-    }
-
-    func dismiss() {
-        withAnimation(.easeInOut(duration: 0.22)) {
-            presentedItem = nil
-        }
-    }
-
-    fileprivate func clear() {
-        snapshot = nil
-    }
-}
-
-/// Clon de la portada que crece desde el póster tocado hasta encajar exactamente
-/// en la cabecera de `DetailView`, con transición cruzada póster → backdrop.
-private struct ExpandingPosterOverlay: View {
-    @ObservedObject var transition: PosterTransition
-    @State private var expanded = false
-    @State private var fadingOut = false
-
-    var body: some View {
-        ZStack(alignment: .topLeading) {
-            if let snapshot = transition.snapshot {
-                let target = targetRect(in: transition.contentFrame)
-                // Escala que hace lucir el contenido (dibujado siempre a tamaño final)
-                // como si tuviera el tamaño del póster de origen — así nunca se
-                // relayoutea la imagen durante la animación, solo se transforma.
-                let scaleX = target.width > 0 ? snapshot.frame.width / target.width : 1
-                let scaleY = target.height > 0 ? snapshot.frame.height / target.height : 1
-                let restRadius = scaleX > 0 ? 14 / scaleX : 14
-
-                ZStack {
-                    PosterImage(url: snapshot.posterURL)
-                        .aspectRatio(contentMode: .fill)
-                        .opacity(expanded ? 0 : 1)
-
-                    PosterImage(url: snapshot.backdropURL ?? snapshot.posterURL)
-                        .aspectRatio(contentMode: .fill)
-                        .opacity(expanded ? 1 : 0)
-                }
-                .compositingGroup()
-                .frame(width: target.width, height: target.height)
-                .clipShape(
-                    RoundedRectangle(cornerRadius: expanded ? DetailCard.cornerRadius : restRadius, style: .continuous)
-                )
-                .shadow(color: .black.opacity(expanded ? 0.45 : 0.28), radius: expanded ? 34 : 10, y: expanded ? 18 : 6)
-                .scaleEffect(x: expanded ? 1 : scaleX, y: expanded ? 1 : scaleY, anchor: .center)
-                .position(
-                    x: expanded ? target.midX : snapshot.frame.midX,
-                    y: expanded ? target.midY : snapshot.frame.midY
-                )
-                .opacity(fadingOut ? 0 : 1)
-                .onAppear { runAnimation() }
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
-    }
-
-    /// La misma cabecera a pantalla completa que `DetailView` dibuja arriba del todo.
-    private func targetRect(in contentFrame: CGRect) -> CGRect {
-        guard contentFrame != .zero else { return .zero }
-        let cardWidth = contentFrame.width
-        let headerHeight = cardWidth * 9 / 16
-        return CGRect(
-            x: contentFrame.minX,
-            y: contentFrame.minY,
-            width: cardWidth,
-            height: headerHeight
-        )
-    }
-
-    private func runAnimation() {
-        expanded = false
-        fadingOut = false
-        // Un spring, no una curva de tiempo fija: se siente nativo y el `completion`
-        // real evita el desfase de un `DispatchQueue` con una duración adivinada.
-        withAnimation(.spring(response: 0.5, dampingFraction: 0.87), completionCriteria: .logicallyComplete) {
-            expanded = true
-        } completion: {
-            withAnimation(.easeOut(duration: 0.18), completionCriteria: .logicallyComplete) {
-                fadingOut = true
-            } completion: {
-                transition.clear()
-            }
-        }
-    }
-}
-
 struct HomeView: View {
     @EnvironmentObject private var coordinator: PlaybackCoordinator
     @StateObject private var search = SearchViewModel()
     @StateObject private var recentlyViewed = RecentlyViewedStore()
+    @ObservedObject private var watchProgress = WatchProgressStore.shared
+    @ObservedObject private var translator = QueryTranslator.shared
     @State private var query = ""
     @State private var selection: SidebarCategory? = .home
     @State private var showingSettings = false
@@ -366,7 +514,6 @@ struct HomeView: View {
     @StateObject private var moviesModel = CategoryViewModel(kind: .movies)
     @StateObject private var seriesModel = CategoryViewModel(kind: .tvshows)
     @StateObject private var animesModel = CategoryViewModel(kind: .animes)
-    @StateObject private var posterTransition = PosterTransition()
 
     var body: some View {
         // Sin NavigationSplitView: la sidebar es una capa custom que flota
@@ -377,24 +524,7 @@ struct HomeView: View {
                     AppBackground()
 
                     catalog
-
-                    // Tarjeta flotante con blur: el catálogo se ve (desenfocado) detrás.
-                    if let presented = posterTransition.presentedItem {
-                        DetailView(item: presented, onDismiss: { posterTransition.dismiss() })
-                            .transition(.opacity)
-                    }
                 }
-                // Para que la animación de expansión sepa exactamente dónde
-                // termina la tarjeta de detalle.
-                .background(
-                    GeometryReader { geo in
-                        Color.clear
-                            .onAppear { posterTransition.contentFrame = geo.frame(in: .global) }
-                            .onChange(of: geo.frame(in: .global)) { _, newValue in
-                                posterTransition.contentFrame = newValue
-                            }
-                    }
-                )
                 .navigationDestination(for: CatalogItem.self) { DetailView(item: $0) }
                 .navigationDestination(for: PlaybackTarget.self) { PlayerLoaderView(target: $0) }
                 .hidingNavigationBar()
@@ -422,17 +552,18 @@ struct HomeView: View {
                         .transition(.opacity)
                 }
             }
-
-            // El póster tocado crece hasta cubrir toda la ventana mientras se abre la película.
-            ExpandingPosterOverlay(transition: posterTransition)
         }
         .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isSidebarOpen)
-        .environmentObject(posterTransition)
         .environmentObject(router)
         .environmentObject(recentlyViewed)
         .preferredColorScheme(.dark)
         .task { await model.load() }
         .task(id: query) { await search.run(query) }
+        // Si falta el idioma de traducción, el sistema pide permiso para descargarlo.
+        .translationTask(translator.downloadConfig) { session in
+            try? await session.prepareTranslation()
+            translator.downloadConfig = nil
+        }
         // Cambiar de categoría siempre vuelve a la raíz de esa sección; salir de
         // Buscar limpia el término para no dejarlo pendiente al volver.
         .onChange(of: selection) {
@@ -451,10 +582,10 @@ struct HomeView: View {
         #endif
     }
 
-    /// La sidebar solo aplica en las pantallas de exploración: sin nada
-    /// presentado encima del catálogo y sin nada apilado en la navegación.
+    /// La sidebar solo aplica en la raíz de exploración: sin nada apilado
+    /// en la navegación (detalle, reproductor).
     private var isSidebarAvailable: Bool {
-        router.path.isEmpty && posterTransition.presentedItem == nil
+        router.path.isEmpty
     }
 
     private var sidebarConfig: SidebarConfiguration { .default }
@@ -537,6 +668,8 @@ struct HomeView: View {
                 SearchLandingView(
                     query: $query,
                     searchState: search.state,
+                    suggestions: search.suggestions,
+                    fallbackName: search.fallbackName,
                     recentlyViewed: recentlyViewed,
                     onSelectCategory: { selection = $0 }
                 )
@@ -563,6 +696,9 @@ struct HomeView: View {
                 if !model.featuredItems.isEmpty {
                     HeroCarousel(items: model.featuredItems)
                         .ignoresSafeArea(edges: .top)
+                }
+                if !watchProgress.entries.isEmpty {
+                    ContinueWatchingShelf(store: watchProgress)
                 }
                 ForEach(model.shelves) { shelf in
                     ShelfView(shelf: shelf)
@@ -668,6 +804,8 @@ private extension View {
 private struct SearchLandingView: View {
     @Binding var query: String
     let searchState: SearchViewModel.State
+    let suggestions: [TitleSuggestion]
+    let fallbackName: String?
     @ObservedObject var recentlyViewed: RecentlyViewedStore
     let onSelectCategory: (SidebarCategory) -> Void
 
@@ -677,7 +815,12 @@ private struct SearchLandingView: View {
         VStack(spacing: 0) {
             searchField
             if isSearching {
-                SearchResultsView(state: searchState)
+                SearchResultsView(
+                    state: searchState,
+                    suggestions: suggestions,
+                    fallbackName: fallbackName,
+                    onPick: { query = $0 }
+                )
             } else {
                 landing
             }
@@ -812,10 +955,329 @@ private extension SidebarCategory {
     }
 }
 
+// MARK: - Trailer y plataformas
+
+/// "Dónde ver": plataformas por país (datos de JustWatch vía TMDB), con selector de país.
+/// Tocar una plataforma (o elegirla en "Buscar plataforma") muestra en qué países está el título.
+private struct StreamingSection: View {
+    let streaming: [String: StreamingAvailability]
+    @Binding var country: String
+    @State private var selectedProvider: StreamingProvider?
+
+    private static let spanish = Locale(identifier: "es")
+
+    private func name(_ code: String) -> String {
+        Self.spanish.localizedString(forRegionCode: code) ?? code
+    }
+
+    private var countries: [String] {
+        streaming.keys.sorted { name($0).localizedCompare(name($1)) == .orderedAscending }
+    }
+
+    /// El país elegido si tiene datos; si no, el primero disponible.
+    private var effectiveCountry: String {
+        streaming[country] != nil ? country : (countries.first ?? country)
+    }
+
+    /// Todas las plataformas del título en cualquier país, sin repetir.
+    private var allProviders: [StreamingProvider] {
+        var seen = Set<Int>()
+        return streaming.values
+            .flatMap { $0.subscription + $0.free }
+            .filter { seen.insert($0.id).inserted }
+            .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+    }
+
+    var body: some View {
+        let availability = streaming[effectiveCountry]
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Text("Dónde ver")
+                    .font(.system(.title3, design: .rounded).weight(.semibold))
+                    .foregroundStyle(.white)
+                Spacer()
+                platformPicker
+                countryPicker
+            }
+
+            if let availability {
+                group("Suscripción", availability.subscription)
+                group("Gratis", availability.free)
+            }
+
+            if let selectedProvider {
+                countriesPanel(for: selectedProvider)
+            }
+
+            HStack(spacing: 4) {
+                Text("Datos de streaming de JustWatch")
+                if let link = availability?.link {
+                    Link("· Ver en JustWatch", destination: link)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.4))
+        }
+        .padding(.top, 6)
+    }
+
+    private var countryPicker: some View {
+        SearchablePicker(
+            title: name(effectiveCountry),
+            systemImage: "globe",
+            prompt: "Buscar país",
+            options: countries.map { PickerOption(id: $0, title: name($0)) },
+            selectedID: effectiveCountry,
+            onPick: { country = $0 }
+        )
+    }
+
+    /// La búsqueda a la inversa: elegir una plataforma y ver en qué países está el título.
+    private var platformPicker: some View {
+        SearchablePicker(
+            title: "Buscar plataforma",
+            systemImage: "magnifyingglass",
+            prompt: "Buscar plataforma",
+            options: allProviders.map { PickerOption(id: String($0.id), title: $0.name, logoURL: $0.logoURL) },
+            selectedID: selectedProvider.map { String($0.id) },
+            onPick: { id in selectedProvider = allProviders.first { String($0.id) == id } }
+        )
+    }
+
+    /// Países donde el título está en la plataforma elegida, con el tipo de acceso.
+    private func countriesPanel(for provider: StreamingProvider) -> some View {
+        let hits: [(code: String, kinds: [String])] = countries.compactMap { code in
+            guard let entry = streaming[code] else { return nil }
+            var kinds: [String] = []
+            if entry.subscription.contains(where: { $0.id == provider.id }) { kinds.append("Suscripción") }
+            if entry.free.contains(where: { $0.id == provider.id }) { kinds.append("Gratis") }
+            return kinds.isEmpty ? nil : (code, kinds)
+        }
+
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                CachedAsyncImage(url: provider.logoURL, category: .platform) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Color.white.opacity(0.08)
+                }
+                .frame(width: 30, height: 30)
+                .clipShape(Circle())
+                Text(hits.isEmpty
+                     ? "No está en \(provider.name) en ningún país"
+                     : "En \(provider.name) en \(hits.count) \(hits.count == 1 ? "país" : "países")")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                Spacer()
+                Button {
+                    selectedProvider = nil
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.white.opacity(0.5))
+                }
+                .buttonStyle(.plain)
+            }
+            WrappingChips(spacing: 8) {
+                ForEach(hits, id: \.code) { hit in
+                    Button {
+                        country = hit.code
+                    } label: {
+                        HStack(spacing: 6) {
+                            Text(name(hit.code)).fontWeight(.medium)
+                            Text(hit.kinds.joined(separator: " · "))
+                                .foregroundStyle(.white.opacity(0.5))
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 6)
+                        .background(.white.opacity(hit.code == effectiveCountry ? 0.2 : 0.09), in: Capsule())
+                        .overlay(Capsule().stroke(.white.opacity(0.15), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(.white.opacity(0.1), lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private func group(_ title: String, _ providers: [StreamingProvider]) -> some View {
+        if !providers.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title)
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.5))
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 22) {
+                        ForEach(providers) { provider in
+                            ProviderTile(provider: provider, isSelected: provider == selectedProvider) {
+                                selectedProvider = provider == selectedProvider ? nil : provider
+                            }
+                        }
+                    }
+                    // Aire para el brillo y el zoom del hover: el ScrollView recorta lo que sale.
+                    .padding(.horizontal, 36)
+                    .padding(.vertical, 40)
+                }
+                .scrollClipDisabled()
+                .padding(.horizontal, -36)
+                .padding(.vertical, -14)
+            }
+        }
+    }
+}
+
+struct PickerOption: Identifiable, Hashable {
+    let id: String
+    let title: String
+    var logoURL: URL?
+}
+
+/// Botón que abre un popover nativo con un campo de búsqueda y la lista filtrada
+/// (sin tildes ni mayúsculas). Intro elige la primera coincidencia.
+private struct SearchablePicker: View {
+    let title: String
+    let systemImage: String
+    let prompt: String
+    let options: [PickerOption]
+    let selectedID: String?
+    let onPick: (String) -> Void
+
+    @State private var isOpen = false
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    private var filtered: [PickerOption] {
+        let query = text.trimmingCharacters(in: .whitespaces)
+        return query.isEmpty ? options : options.filter { $0.title.localizedStandardContains(query) }
+    }
+
+    var body: some View {
+        Button { isOpen = true } label: {
+            Label(title, systemImage: systemImage)
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Capsule())
+        .popover(isPresented: $isOpen, arrowEdge: .bottom) {
+            VStack(spacing: 10) {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                    TextField(prompt, text: $text)
+                        .textFieldStyle(.plain)
+                        .focused($focused)
+                        .onSubmit { if let first = filtered.first { pick(first) } }
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 2) {
+                        ForEach(filtered) { option in
+                            Button { pick(option) } label: {
+                                HStack(spacing: 10) {
+                                    if option.logoURL != nil {
+                                        CachedAsyncImage(url: option.logoURL, category: .platform) { image in
+                                            image.resizable().scaledToFill()
+                                        } placeholder: {
+                                            Color.white.opacity(0.08)
+                                        }
+                                        .frame(width: 26, height: 26)
+                                        .clipShape(Circle())
+                                    }
+                                    Text(option.title).lineLimit(1)
+                                    Spacer(minLength: 0)
+                                    if option.id == selectedID {
+                                        Image(systemName: "checkmark").foregroundStyle(.secondary)
+                                    }
+                                }
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 6)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        if filtered.isEmpty {
+                            Text("Sin resultados")
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity)
+                                .padding(.top, 20)
+                        }
+                    }
+                }
+                .frame(height: 260)
+            }
+            .padding(12)
+            .frame(width: 290)
+            .onAppear { text = ""; focused = true }
+        }
+    }
+
+    private func pick(_ option: PickerOption) {
+        onPick(option.id)
+        isOpen = false
+    }
+}
+
+/// Tarjeta circular de plataforma, con el diseño de las competiciones de KerterApp: círculo
+/// oscuro con borde, brillo al pasar el ratón y zoom. El logo (que trae su propio fondo)
+/// rellena todo el círculo.
+private struct ProviderTile: View {
+    let provider: StreamingProvider
+    let isSelected: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    private let size: CGFloat = 120
+    private var active: Bool { hovering || isSelected }
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 10) {
+                CachedAsyncImage(url: provider.logoURL, category: .platform) { image in
+                    image.resizable().scaledToFill()
+                } placeholder: {
+                    Color(red: 0.082, green: 0.094, blue: 0.122)
+                }
+                .frame(width: size, height: size)
+                .clipShape(Circle())
+                .overlay(
+                    Circle().strokeBorder(active ? Color.white.opacity(0.9) : .white.opacity(0.08),
+                                          lineWidth: active ? 2 : 1)
+                )
+                .shadow(color: active ? .white.opacity(0.3) : .black.opacity(0.5),
+                        radius: active ? 18 : 10, y: active ? 4 : 6)
+                .scaleEffect(hovering ? 1.05 : 1)
+
+                Text(provider.name)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(isSelected ? .white : .white.opacity(0.6))
+                    .lineLimit(1)
+            }
+            .frame(width: size + 16)
+        }
+        .buttonStyle(.plain)
+        .animation(.spring(response: 0.3, dampingFraction: 0.7), value: hovering)
+        .onHover { hovering = $0 }
+        .help(provider.name)
+    }
+}
+
 // MARK: - Search results
 
 private struct SearchResultsView: View {
     let state: SearchViewModel.State
+    let suggestions: [TitleSuggestion]
+    let fallbackName: String?
+    let onPick: (String) -> Void
 
     var body: some View {
         switch state {
@@ -826,14 +1288,52 @@ private struct SearchResultsView: View {
         case .tooShort:
             message("Escribe al menos 3 caracteres", systemImage: "text.cursor")
         case .empty:
-            message("No se encontraron resultados", systemImage: "magnifyingglass")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    message("No se encontraron resultados", systemImage: "magnifyingglass")
+                        .frame(maxWidth: .infinity, minHeight: suggestions.isEmpty ? 260 : 120)
+                    if !suggestions.isEmpty {
+                        NameSuggestionsView(
+                            title: "Prueba con otro nombre",
+                            suggestions: suggestions,
+                            onPick: onPick
+                        )
+                    }
+                }
+                .padding(36)
+            }
         case .failed:
-            message("No se pudo completar la búsqueda", systemImage: "wifi.exclamationmark")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    message("No se pudo completar la búsqueda", systemImage: "wifi.exclamationmark")
+                        .frame(maxWidth: .infinity, minHeight: suggestions.isEmpty ? 260 : 120)
+                    if !suggestions.isEmpty {
+                        NameSuggestionsView(
+                            title: "Prueba con otro nombre",
+                            suggestions: suggestions,
+                            onPick: onPick
+                        )
+                    }
+                }
+                .padding(36)
+            }
         case .results(let items):
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
-                    ForEach(items) { item in
-                        PosterCard(item: item)
+                VStack(alignment: .leading, spacing: 28) {
+                    if let fallbackName {
+                        FallbackBanner(name: fallbackName)
+                    }
+                    if !suggestions.isEmpty {
+                        NameSuggestionsView(
+                            title: "También conocida como",
+                            suggestions: suggestions,
+                            onPick: onPick
+                        )
+                    }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
+                        ForEach(items) { item in
+                            PosterCard(item: item)
+                        }
                     }
                 }
                 .padding(36)
@@ -851,18 +1351,180 @@ private struct SearchResultsView: View {
     }
 }
 
+/// Aviso de que los resultados salieron de otro nombre del mismo título.
+private struct FallbackBanner: View {
+    let name: String
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "sparkles")
+                .foregroundStyle(.yellow)
+            Text("Mostrando resultados para ")
+                .foregroundStyle(.white.opacity(0.7))
+            + Text("“\(name)”")
+                .fontWeight(.semibold)
+                .foregroundStyle(.white)
+        }
+        .font(.callout)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .glassEffect(.regular, in: Capsule())
+    }
+}
+
+/// Títulos de TMDB afines a lo buscado, cada uno con sus nombres alternativos como
+/// botones: al tocar uno se relanza la búsqueda con ese nombre.
+private struct NameSuggestionsView: View {
+    let title: String
+    let suggestions: [TitleSuggestion]
+    let onPick: (String) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label(title, systemImage: "text.magnifyingglass")
+                .font(.system(.title3, design: .rounded).weight(.semibold))
+                .foregroundStyle(.white)
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: 12) {
+                    ForEach(suggestions) { suggestion in
+                        SuggestionCard(suggestion: suggestion, onPick: onPick)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+        }
+    }
+}
+
+private struct SuggestionCard: View {
+    let suggestion: TitleSuggestion
+    let onPick: (String) -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            poster
+            VStack(alignment: .leading, spacing: 8) {
+                Button { onPick(suggestion.title) } label: {
+                    Text(suggestion.title)
+                        .font(.system(.headline, design: .rounded))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.leading)
+                        .lineLimit(2)
+                }
+                .buttonStyle(.plain)
+
+                HStack(spacing: 6) {
+                    Text(suggestion.kind.label)
+                    if let year = suggestion.year { Text("· \(year)") }
+                }
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.55))
+
+                if !suggestion.aliases.isEmpty {
+                    WrappingChips(spacing: 6) {
+                        ForEach(suggestion.aliases, id: \.self) { name in
+                            AliasChip(name: name) { onPick(name) }
+                        }
+                    }
+                }
+            }
+            .frame(width: 210, alignment: .leading)
+        }
+        .padding(12)
+        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(.white.opacity(0.1), lineWidth: 1)
+        )
+    }
+
+    private var poster: some View {
+        CachedAsyncImage(url: suggestion.posterURL, category: .poster) { phase in
+            if case .success(let image) = phase {
+                image.resizable().scaledToFill()
+            } else {
+                ZStack {
+                    Color.white.opacity(0.08)
+                    Image(systemName: "film").foregroundStyle(.white.opacity(0.3))
+                }
+            }
+        }
+        .frame(width: 66, height: 99)
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct AliasChip: View {
+    let name: String
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(name)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.white.opacity(hovering ? 1 : 0.85))
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(.white.opacity(hovering ? 0.22 : 0.1), in: Capsule())
+                .overlay(Capsule().stroke(.white.opacity(hovering ? 0.4 : 0.15), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .animation(.easeOut(duration: 0.15), value: hovering)
+        .onHover { hovering = $0 }
+    }
+}
+
+/// Coloca sus hijos en filas, saltando de línea cuando no caben.
+private struct WrappingChips: Layout {
+    var spacing: CGFloat = 6
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(width: proposal.width ?? .infinity, subviews: subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let layout = arrange(width: bounds.width, subviews: subviews)
+        for (subview, origin) in zip(subviews, layout.origins) {
+            subview.place(at: CGPoint(x: bounds.minX + origin.x, y: bounds.minY + origin.y), proposal: .unspecified)
+        }
+    }
+
+    private func arrange(width: CGFloat, subviews: Subviews) -> (size: CGSize, origins: [CGPoint]) {
+        var origins: [CGPoint] = []
+        var x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0, maxX: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+            if x > 0, x + size.width > width { x = 0; y += rowHeight + spacing; rowHeight = 0 }
+            origins.append(CGPoint(x: x, y: y))
+            x += size.width + spacing
+            rowHeight = max(rowHeight, size.height)
+            maxX = max(maxX, x - spacing)
+        }
+        return (CGSize(width: maxX, height: y + rowHeight), origins)
+    }
+}
+
 // MARK: - Hero
 
-/// Rota automáticamente entre varias películas destacadas, como el banner de Apple TV.
+/// Banner de destacadas. Cambia con un fundido a oscuro (sale una, entra la otra) y el
+/// texto entra con un ligero desplazamiento. Avanza solo cada 7 s y también con dos
+/// dedos en el trackpad (o arrastrando); el temporizador se reinicia al cambiar a mano.
 private struct HeroCarousel: View {
     let items: [CatalogItem]
     @State private var index = 0
+    /// Cuántas páginas (contando desde 0) ya pueden descargar sus datos: las tres primeras
+    /// en paralelo al abrir; crece de a dos por delante a medida que el usuario avanza.
+    @State private var loadedThrough = 2
+    @State private var lastChange = Date.distantPast
 
     var body: some View {
         ZStack(alignment: .bottom) {
+            Brand.background
+
             ForEach(Array(items.enumerated()), id: \.element.id) { position, item in
-                HeroView(item: item)
-                    .opacity(position == index ? 1 : 0)
+                HeroView(item: item, shouldLoad: position <= loadedThrough, isActive: position == index)
                     .allowsHitTesting(position == index)
             }
 
@@ -874,41 +1536,118 @@ private struct HeroCarousel: View {
                             .frame(width: position == index ? 18 : 6, height: 6)
                     }
                 }
-                .animation(.easeOut(duration: 0.25), value: index)
+                .animation(.easeOut(duration: 0.3), value: index)
                 .padding(.bottom, 20)
+                .allowsHitTesting(false)
             }
         }
-        .task(id: items.map(\.id)) { await autoAdvance() }
+        .background(HorizontalSwipeCatcher { step($0) })
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 30).onEnded { value in
+                if abs(value.translation.width) > abs(value.translation.height) * 1.5 {
+                    step(value.translation.width < 0 ? 1 : -1)
+                }
+            }
+        )
+        .onChange(of: index) { _, new in loadedThrough = max(loadedThrough, new + 2) }
+        .task(id: TimerKey(ids: items.map(\.id), index: index)) { await autoAdvance() }
+    }
+
+    private struct TimerKey: Hashable { let ids: [Int]; let index: Int }
+
+    /// Cambia de página (`1` siguiente, `-1` anterior), ignorando gestos mientras dura el fundido.
+    private func step(_ direction: Int) {
+        guard items.count > 1, Date().timeIntervalSince(lastChange) > 0.9 else { return }
+        lastChange = Date()
+        index = (index + direction + items.count) % items.count
     }
 
     private func autoAdvance() async {
         guard items.count > 1 else { return }
-        while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(7))
-            if Task.isCancelled { return }
-            withAnimation(.easeInOut(duration: 0.6)) {
-                index = (index + 1) % items.count
-            }
-        }
+        try? await Task.sleep(for: .seconds(7))
+        if Task.isCancelled { return }
+        lastChange = Date()
+        index = (index + 1) % items.count
     }
 }
 
+#if os(macOS)
+/// Detecta el deslizamiento horizontal con dos dedos sobre su área (rueda/trackpad).
+private struct HorizontalSwipeCatcher: NSViewRepresentable {
+    let onSwipe: (Int) -> Void
+
+    func makeNSView(context: Context) -> NSView { CatcherView(onSwipe: onSwipe) }
+    func updateNSView(_ view: NSView, context: Context) { (view as? CatcherView)?.onSwipe = onSwipe }
+
+    private final class CatcherView: NSView {
+        var onSwipe: (Int) -> Void
+        private var monitor: Any?
+        private var accumulated: CGFloat = 0
+        private var fired = false
+
+        init(onSwipe: @escaping (Int) -> Void) {
+            self.onSwipe = onSwipe
+            super.init(frame: .zero)
+        }
+        required init?(coder: NSCoder) { fatalError() }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let monitor { NSEvent.removeMonitor(monitor); self.monitor = nil }
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                self?.handle(event) ?? event
+            }
+        }
+
+        deinit { if let monitor { NSEvent.removeMonitor(monitor) } }
+
+        private func handle(_ event: NSEvent) -> NSEvent? {
+            guard let window, event.window === window else { return event }
+            let point = convert(event.locationInWindow, from: nil)
+            guard bounds.contains(point) else { return event }
+            guard abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY) || accumulated != 0 else { return event }
+
+            if event.phase == .began { accumulated = 0; fired = false }
+            accumulated += event.scrollingDeltaX
+            if !fired, abs(accumulated) > 50 {
+                fired = true
+                onSwipe(accumulated < 0 ? 1 : -1)
+            }
+            if event.phase == .ended || event.phase == .cancelled || event.momentumPhase == .ended {
+                accumulated = 0
+                fired = false
+            }
+            return nil
+        }
+    }
+}
+#else
+private struct HorizontalSwipeCatcher: View {
+    let onSwipe: (Int) -> Void
+    var body: some View { Color.clear }
+}
+#endif
+
 private struct HeroView: View {
     let item: CatalogItem
+    let shouldLoad: Bool
+    var isActive = true
+    @State private var tmdbBackdropURL: URL?
+    @State private var qualityTiers: [QualityTier] = []
+    @State private var hasWebDL = false
 
     var body: some View {
         ZStack(alignment: .bottomLeading) {
+            Group {
             GeometryReader { proxy in
                 let minY = proxy.frame(in: .global).minY
                 let pulledDown = max(0, minY)
                 let scrolledUp = min(0, minY)
                 Color(white: 0.05)
                     .overlay {
-                        AsyncImage(url: item.images.backdropURL) { image in
-                            image.resizable().scaledToFill()
-                        } placeholder: {
-                            Color.clear
-                        }
+                        PosterImage(url: tmdbBackdropURL, category: .backdrop)
+                            .aspectRatio(contentMode: .fill)
                     }
                     .frame(width: proxy.size.width, height: proxy.size.height + pulledDown + abs(scrolledUp) * 0.3)
                     .offset(y: minY > 0 ? -minY : minY * 0.3)
@@ -923,11 +1662,15 @@ private struct HeroView: View {
                 colors: [Brand.background.opacity(0.75), .clear],
                 startPoint: .leading, endPoint: .trailing
             )
+            }
+            // Fundido a oscuro: la saliente se apaga primero y la entrante aparece después.
+            .opacity(isActive ? 1 : 0)
+            .animation(isActive ? .easeInOut(duration: 0.6).delay(0.3) : .easeInOut(duration: 0.4), value: isActive)
 
             VStack(alignment: .leading, spacing: 14) {
-                TitleLogo(item: item, textFont: .system(size: 42, weight: .bold, design: .rounded))
+                TitleLogo(item: item, textFont: .system(size: 42, weight: .bold, design: .rounded), enabled: shouldLoad)
 
-                MetaRow(item: item)
+                DetailMetaRow(item: item, tiers: qualityTiers, hasWebDL: hasWebDL)
 
                 if !item.overview.isEmpty {
                     Text(item.overview)
@@ -938,7 +1681,7 @@ private struct HeroView: View {
                 }
 
                 HStack(spacing: 14) {
-                    PlayButton(target: PlaybackTarget(postId: item.id, title: item.displayTitle)) {
+                    PlayButton(target: PlaybackTarget(postId: item.id, title: item.displayTitle, watch: WatchInfo(item: item))) {
                         Label("Reproducir", systemImage: "play.fill")
                             .font(.headline)
                             .padding(.horizontal, 26)
@@ -962,8 +1705,21 @@ private struct HeroView: View {
                 .padding(.top, 4)
             }
             .padding(EdgeInsets(top: 20, leading: 36, bottom: 40, trailing: 36))
+            // El texto entra un poco después que la imagen, subiendo suavemente.
+            .opacity(isActive ? 1 : 0)
+            .offset(y: isActive ? 0 : 14)
+            .animation(isActive ? .easeOut(duration: 0.6).delay(0.5) : .easeIn(duration: 0.3), value: isActive)
         }
         .frame(height: 620)
+        .task(id: shouldLoad) {
+            guard shouldLoad, tmdbBackdropURL == nil else { return }
+            async let images = TMDBService.shared.images(for: item)
+            async let downloads = (try? await LaMovieAPI.downloads(postId: item.id)) ?? []
+            let (resolvedImages, resolvedDownloads) = await (images, downloads)
+            qualityTiers = resolvedDownloads.qualityTiers
+            hasWebDL = resolvedDownloads.contains(where: \.isWebDL)
+            tmdbBackdropURL = resolvedImages.backdrop
+        }
     }
 }
 
@@ -994,16 +1750,15 @@ private struct ShelfView: View {
 private struct PosterCard: View {
     let item: CatalogItem
     @State private var hovering = false
-    @State private var posterFrame: CGRect = .zero
     @State private var tmdbPosterURL: URL?
-    @EnvironmentObject private var transition: PosterTransition
+    @EnvironmentObject private var router: NavigationRouter
     @EnvironmentObject private var recentlyViewed: RecentlyViewedStore
 
     private var posterURL: URL? { tmdbPosterURL ?? item.images.posterURL }
 
     var body: some View {
         Button {
-            transition.open(item, posterURL: posterURL, backdropURL: item.images.backdropURL, frame: posterFrame)
+            router.path.append(item)
             recentlyViewed.add(item)
         } label: {
             cardBody
@@ -1036,13 +1791,6 @@ private struct PosterCard: View {
                         .padding(6)
                 }
             }
-            .background(
-                GeometryReader { geo in
-                    Color.clear
-                        .onAppear { posterFrame = geo.frame(in: .global) }
-                        .onChange(of: geo.frame(in: .global)) { _, newValue in posterFrame = newValue }
-                }
-            )
             .frame(width: 190)
             .animation(.easeInOut(duration: 0.15), value: hovering)
             .onHover { hovering = $0 }
@@ -1064,6 +1812,40 @@ private struct MetaRow: View {
     }
 }
 
+/// Fila de metadatos de la ficha, como en Apple TV: año · duración, clasificación con
+/// icono y, a continuación, las insignias de calidad.
+private struct DetailMetaRow: View {
+    let item: CatalogItem
+    let tiers: [QualityTier]
+    let hasWebDL: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text([item.year, item.runtimeText].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "))
+                .foregroundStyle(.white.opacity(0.75))
+
+            if let rating = item.ratingText {
+                Label(rating, systemImage: "star.fill")
+                    .foregroundStyle(.white.opacity(0.75))
+            }
+
+            if let certification = item.certification, !certification.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "checkmark.circle")
+                        .fontWeight(.semibold)
+                    Text(certification)
+                }
+                .foregroundStyle(.white.opacity(0.75))
+            }
+
+            // Solo la calidad más alta: si hay 4K no se muestra además FULL HD / HD.
+            if let top = tiers.first { QualityBadge(label: top.label, filled: true) }
+            if hasWebDL { QualityBadge(label: "WEB-DL") }
+        }
+        .font(.system(size: 17, weight: .medium, design: .rounded))
+    }
+}
+
 // MARK: - Detail
 
 struct DetailView: View {
@@ -1082,6 +1864,10 @@ struct DetailView: View {
     @State private var tmdbBackdropURL: URL?
     @State private var qualityTiers: [QualityTier] = []
     @State private var hasWebDL = false
+    @Environment(\.openURL) private var openURL
+    @AppStorage("streamingCountry") private var streamingCountry = Locale.current.region?.identifier ?? "US"
+    /// La ficha no se muestra hasta tener portada, logo, sinopsis y calidades.
+    @State private var ready = false
 
     private var isSeries: Bool { item.kind != .movies }
 
@@ -1102,6 +1888,13 @@ struct DetailView: View {
             }
             .scrollIndicators(.hidden)
             .ignoresSafeArea(edges: .top)
+            .opacity(ready ? 1 : 0)
+
+            if !ready {
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(.white)
+            }
 
             if let onDismiss {
                 Button(action: onDismiss) {
@@ -1119,18 +1912,36 @@ struct DetailView: View {
         }
         .navigationTitle(item.displayTitle)
         .task(id: season) { await loadEpisodes() }
-        .task(id: item.id) { await loadTMDBDetails() }
-        .task(id: item.id) { await loadQuality() }
+        .task(id: item.id) { await loadEssentials() }
+        // Red de seguridad: si algo tarda demasiado, se muestra la ficha con lo que haya.
+        .task(id: item.id) {
+            try? await Task.sleep(for: .seconds(12))
+            ready = true
+        }
+        .animation(.easeOut(duration: 0.25), value: ready)
         .sheet(item: $downloadTarget) { DownloadSheet(target: $0) }
         .sheet(item: $seasonRequest) { SeasonDownloadSheet(request: $0) }
+    }
+
+    /// Todo lo necesario para pintar la cabecera, en paralelo; al terminar se muestra la ficha.
+    private func loadEssentials() async {
+        async let tmdb: Void = loadTMDBDetails()
+        async let quality: Void = loadQuality()
+        _ = await (tmdb, quality)
+        ready = true
     }
 
     private func loadTMDBDetails() async {
         async let details = TMDBService.shared.details(for: item)
         async let images = TMDBService.shared.images(for: item)
         let (resolvedDetails, resolvedImages) = await (details, images)
+        let backdrop = resolvedImages.backdrop ?? resolvedImages.poster
+        // Portada y logo descargados antes de mostrar la ficha.
+        async let warmBackdrop: Void = prefetchImage(backdrop, category: .backdrop)
+        async let warmLogo: Void = prefetchImage(resolvedImages.logo, category: .logo)
+        _ = await (warmBackdrop, warmLogo)
         tmdbDetails = resolvedDetails
-        tmdbBackdropURL = resolvedImages.backdrop ?? resolvedImages.poster
+        tmdbBackdropURL = backdrop
     }
 
     /// Solo para películas: los episodios tienen su propia calidad por enlace.
@@ -1138,7 +1949,7 @@ struct DetailView: View {
         guard !isSeries else { return }
         let downloads = (try? await LaMovieAPI.downloads(postId: item.id)) ?? []
         qualityTiers = downloads.qualityTiers
-        hasWebDL = downloads.contains { $0.category == .webDL }
+        hasWebDL = downloads.contains(where: \.isWebDL)
     }
 
     /// Ficha a pantalla completa cuya cabecera coincide en tamaño con el destino
@@ -1146,13 +1957,8 @@ struct DetailView: View {
     private var card: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .bottomLeading) {
-                Color(white: 0.05)
+                Color.clear
                     .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                    .overlay {
-                        PosterImage(url: tmdbBackdropURL ?? item.images.backdropURL ?? item.images.posterURL)
-                            .aspectRatio(contentMode: .fill)
-                            .clipped()
-                    }
 
                 LinearGradient(
                     colors: [.clear, .clear, .black.opacity(0.55), .black.opacity(0.92)],
@@ -1164,14 +1970,7 @@ struct DetailView: View {
                 VStack(alignment: .leading, spacing: 16) {
                     TitleLogo(item: item, textFont: .system(size: 40, weight: .bold, design: .rounded))
                         .shadow(color: .black.opacity(0.6), radius: 12, y: 4)
-                    MetaRow(item: item)
-
-                    if !qualityTiers.isEmpty || hasWebDL {
-                        HStack(spacing: 6) {
-                            ForEach(qualityTiers, id: \.self) { QualityBadge(label: $0.label) }
-                            if hasWebDL { QualityBadge(label: "WEB-DL") }
-                        }
-                    }
+                    DetailMetaRow(item: item, tiers: qualityTiers, hasWebDL: hasWebDL)
 
                     if !item.genreNames.isEmpty {
                         Text(item.genreNames.joined(separator: " · "))
@@ -1179,25 +1978,41 @@ struct DetailView: View {
                             .foregroundStyle(.white.opacity(0.7))
                     }
 
-                    if !isSeries {
-                        HStack(spacing: 12) {
-                            PlayButton(target: PlaybackTarget(postId: item.id, title: item.displayTitle)) {
-                                Label("Reproducir", systemImage: "play.fill")
-                                    .font(.headline)
-                                    .padding(.horizontal, 28)
-                                    .padding(.vertical, 14)
-                                    .background(.white, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                                    .foregroundStyle(.black)
-                            }
-                            .buttonStyle(.plain)
+                    HStack(spacing: 12) {
+                        if !isSeries {
+                                PlayButton(target: PlaybackTarget(postId: item.id, title: item.displayTitle, watch: WatchInfo(item: item))) {
+                                    Label("Reproducir", systemImage: "play.fill")
+                                        .font(.headline)
+                                        .padding(.horizontal, 28)
+                                        .padding(.vertical, 14)
+                                        .background(.white, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                        .foregroundStyle(.black)
+                                }
+                                .buttonStyle(.plain)
 
+                                Button {
+                                    downloadTarget = PlaybackTarget(postId: item.id, title: item.displayTitle)
+                                } label: {
+                                    Label("Descargar", systemImage: "arrow.down")
+                                        .font(.headline)
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 24)
+                                        .padding(.vertical, 14)
+                                        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                }
+                                .buttonStyle(.plain)
+                                .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        }
+
+                        if let trailer = tmdbDetails?.trailer {
                             Button {
-                                downloadTarget = PlaybackTarget(postId: item.id, title: item.displayTitle)
+                                if let url = URL(string: "https://www.youtube.com/watch?v=\(trailer.key)") { openURL(url) }
                             } label: {
-                                Image(systemName: "arrow.down")
+                                Label("Tráiler", systemImage: "play.rectangle")
                                     .font(.headline)
                                     .foregroundStyle(.white)
-                                    .frame(width: 50, height: 50)
+                                    .padding(.horizontal, 24)
+                                    .padding(.vertical, 14)
                                     .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                             }
                             .buttonStyle(.plain)
@@ -1205,7 +2020,7 @@ struct DetailView: View {
                         }
                     }
 
-                    if let tagline = item.tagline, !tagline.isEmpty {
+                    if let tagline = [tmdbDetails?.tagline, item.tagline].compactMap({ $0 }).first(where: { !$0.isEmpty }) {
                         Text(tagline)
                             .italic()
                             .foregroundStyle(.white.opacity(0.6))
@@ -1214,12 +2029,30 @@ struct DetailView: View {
                 .padding(.horizontal, DetailCard.contentHorizontalPadding)
                 .padding(.bottom, 36)
             }
+            .background {
+                // La imagen llena todo el ancho y alto de la cabecera, aunque el contenido la agrande.
+                GeometryReader { proxy in
+                    PosterImage(url: tmdbBackdropURL, category: .backdrop)
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .clipped()
+                }
+                .background(Color(white: 0.05))
+            }
 
             VStack(alignment: .leading, spacing: 18) {
                 if !overviewText.isEmpty {
                     Text(overviewText)
                         .font(.body)
                         .foregroundStyle(.white.opacity(0.85))
+                }
+
+                if let details = tmdbDetails {
+                    infoSection(details)
+                }
+
+                if let streaming = tmdbDetails?.streaming, !streaming.isEmpty {
+                    StreamingSection(streaming: streaming, country: $streamingCountry)
                 }
 
                 if let cast = tmdbDetails?.cast, !cast.isEmpty {
@@ -1234,6 +2067,58 @@ struct DetailView: View {
         }
         .frame(maxWidth: .infinity)
         .background(Brand.card)
+    }
+
+    private func infoRows(_ details: TMDBDetails) -> [(String, String)] {
+        var rows: [(String, String)] = []
+        if let rating = details.rating {
+            var text = String(format: "★ %.1f / 10", rating)
+            if let votes = details.voteCount { text += " (\(votes) votos)" }
+            rows.append(("Puntuación TMDB", text))
+        }
+        if let minutes = details.runtimeMinutes, minutes > 0 {
+            rows.append(("Duración", isSeries ? "\(minutes) min por episodio" : "\(minutes / 60) h \(minutes % 60) min"))
+        }
+        if let seasonCount = details.seasonCount {
+            var text = "\(seasonCount)"
+            if let episodeCount = details.episodeCount { text += " · \(episodeCount) episodios" }
+            rows.append(("Temporadas", text))
+        }
+        if let date = details.releaseDate, !date.isEmpty { rows.append(("Estreno", date)) }
+        if !details.directors.isEmpty {
+            rows.append((isSeries ? "Creado por" : "Dirección", details.directors.joined(separator: ", ")))
+        }
+        if !isSeries, !details.writers.isEmpty { rows.append(("Guion", details.writers.joined(separator: ", "))) }
+        if !details.genres.isEmpty { rows.append(("Géneros", details.genres.joined(separator: ", "))) }
+        if !details.countries.isEmpty { rows.append(("País", details.countries.joined(separator: ", "))) }
+        if let language = details.originalLanguage { rows.append(("Idioma original", language.capitalized)) }
+        if !details.studios.isEmpty { rows.append(("Estudios", details.studios.joined(separator: ", "))) }
+        return rows
+    }
+
+    /// Datos extra de TMDB: puntuación, duración, dirección, países, estudios…
+    @ViewBuilder
+    private func infoSection(_ details: TMDBDetails) -> some View {
+        let rows = infoRows(details)
+        if !rows.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Información")
+                    .font(.system(.title3, design: .rounded).weight(.semibold))
+                    .foregroundStyle(.white)
+                ForEach(rows, id: \.0) { label, value in
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        Text(label)
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.5))
+                            .frame(width: 130, alignment: .leading)
+                        Text(value)
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.85))
+                    }
+                }
+            }
+            .padding(.top, 6)
+        }
     }
 
     @ViewBuilder
@@ -1251,7 +2136,7 @@ struct DetailView: View {
                                 .fill(Brand.card)
                                 .frame(width: 64, height: 64)
                                 .overlay {
-                                    AsyncImage(url: member.profileURL) { image in
+                                    CachedAsyncImage(url: member.profileURL, category: .cast) { image in
                                         image.resizable().scaledToFill()
                                     } placeholder: {
                                         Image(systemName: "person.fill")
@@ -1317,7 +2202,10 @@ struct DetailView: View {
         ForEach(episodes) { episode in
             let episodeTitle = "\(item.displayTitle) · T\(episode.seasonNumber) E\(episode.episodeNumber)"
             HStack(spacing: 8) {
-                PlayButton(target: PlaybackTarget(postId: episode.id, title: episodeTitle)) {
+                PlayButton(target: PlaybackTarget(
+                    postId: episode.id, title: episodeTitle,
+                    watch: WatchInfo(item: item, season: episode.seasonNumber, episode: episode.episodeNumber, episodeTitle: episode.title)
+                )) {
                     EpisodeRow(episode: episode)
                 }
                 .buttonStyle(.plain)
@@ -1358,7 +2246,7 @@ private struct EpisodeRow: View {
             Brand.card
                 .frame(width: 150, height: 84)
                 .overlay {
-                    AsyncImage(url: episode.stillURL) { image in
+                    CachedAsyncImage(url: episode.stillURL, category: .episode) { image in
                         image.resizable().scaledToFill()
                     } placeholder: {
                         Image(systemName: "play.rectangle")
