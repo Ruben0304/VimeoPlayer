@@ -272,7 +272,7 @@ final class TMDBService {
         return TMDBImages(
             logo: best(decoded.logos, excludeSVG: true),
             poster: best(decoded.posters, excludeSVG: false),
-            backdrop: best(decoded.backdrops, excludeSVG: false, textless: true, size: "w780")
+            backdrop: best(decoded.backdrops, excludeSVG: false, textless: true, size: "w1280")
         )
     }
 

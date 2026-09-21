@@ -918,6 +918,20 @@ private struct SearchLandingView: View {
     }
 }
 
+extension View {
+    /// Cursor de manita al pasar el mouse por encima (macOS / iPad con puntero).
+    @ViewBuilder
+    func pointerCursor() -> some View {
+        #if os(macOS)
+        onHover { inside in
+            if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+        #else
+        self
+        #endif
+    }
+}
+
 /// Tarjeta de gradiente vivo, como las categorías de la pestaña Buscar de Apple TV.
 private struct CategoryTile: View {
     let category: SidebarCategory
@@ -956,6 +970,7 @@ private struct CategoryTile: View {
         .buttonStyle(.plain)
         .animation(.spring(response: 0.28, dampingFraction: 0.75), value: hovering)
         .onHover { hovering = $0 }
+        .pointerCursor()
     }
 }
 
@@ -1784,6 +1799,7 @@ private struct PosterCard: View {
             cardBody
         }
         .buttonStyle(.plain)
+        .pointerCursor()
         .task(id: item.id) { tmdbPosterURL = await TMDBService.shared.images(for: item).poster }
     }
 

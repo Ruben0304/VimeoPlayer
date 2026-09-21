@@ -219,6 +219,7 @@ private struct ContinueCard: View {
             .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .animation(.easeInOut(duration: 0.15), value: hovering)
             .onHover { hovering = $0 }
+            .pointerCursor()
     }
 
     private var progressBar: some View {
