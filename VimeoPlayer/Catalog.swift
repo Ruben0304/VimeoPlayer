@@ -66,7 +66,8 @@ struct CatalogItem: Decodable, Identifiable, Hashable {
 
     /// Los títulos vienen como "Nombre (2024)"; el año ya se muestra aparte.
     var displayTitle: String {
-        title.replacingOccurrences(of: #"\s*\(\d{4}\)\s*$"#, with: "", options: .regularExpression)
+        title.decodingHTMLEntities
+            .replacingOccurrences(of: #"\s*\(\d{4}\)\s*$"#, with: "", options: .regularExpression)
     }
 
     var year: String? {
@@ -108,6 +109,31 @@ enum Genre {
     ]
 }
 
+enum APIError: Error {
+    case empty
+}
+
+extension String {
+    /// Decodifica entidades HTML como `&amp;` o `&#8217;` (los títulos de la API las traen).
+    var decodingHTMLEntities: String {
+        guard contains("&") else { return self }
+        var result = self
+        let named = ["&amp;": "&", "&quot;": "\"", "&lt;": "<", "&gt;": ">", "&apos;": "'", "&nbsp;": " "]
+        for (entity, char) in named { result = result.replacingOccurrences(of: entity, with: char) }
+        let regex = try? NSRegularExpression(pattern: "&#(x?)([0-9a-fA-F]+);")
+        let matches = regex?.matches(in: result, range: NSRange(result.startIndex..., in: result)) ?? []
+        for match in matches.reversed() {
+            guard let whole = Range(match.range, in: result),
+                  let hexFlag = Range(match.range(at: 1), in: result),
+                  let digits = Range(match.range(at: 2), in: result),
+                  let code = UInt32(result[digits], radix: result[hexFlag].isEmpty ? 10 : 16),
+                  let scalar = Unicode.Scalar(code) else { continue }
+            result.replaceSubrange(whole, with: String(Character(scalar)))
+        }
+        return result
+    }
+}
+
 enum LaMovieAPI {
     private static let apiURL = URL(string: "https://lamovie.org/wp-api/v1")!
     private static let imageBase = "https://lamovie.org/wp-content/uploads"
@@ -119,6 +145,7 @@ enum LaMovieAPI {
 
     private struct Envelope<Payload: Decodable>: Decodable {
         let error: Bool?
+        let message: String?
         let data: Payload?
     }
 
@@ -145,7 +172,11 @@ enum LaMovieAPI {
 
     private static func get<Payload: Decodable>(_ path: String, _ query: [String: String], as type: Payload.Type) async throws -> Payload {
         var components = URLComponents(url: apiURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
-        components.queryItems = query.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
+        // URLQueryItem no escapa "&", "+" ni "=" dentro del valor; hay que hacerlo a mano.
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-._~"))
+        components.percentEncodedQueryItems = query.sorted { $0.key < $1.key }.map {
+            URLQueryItem(name: $0.key, value: $0.value.addingPercentEncoding(withAllowedCharacters: allowed))
+        }
         var request = URLRequest(url: components.url!)
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 
@@ -154,6 +185,7 @@ enum LaMovieAPI {
             throw URLError(.badServerResponse)
         }
         let decoded = try JSONDecoder().decode(Envelope<Payload>.self, from: data)
+        if decoded.error == true, decoded.message == "empty" { throw APIError.empty }
         guard decoded.error != true, let payload = decoded.data else { throw URLError(.cannotParseResponse) }
         return payload
     }
@@ -166,6 +198,22 @@ enum LaMovieAPI {
             "postType": kind.rawValue,
             "postsPerPage": String(perPage),
         ], as: ListingPayload.self).posts
+    }
+
+    /// Búsqueda por texto (la API exige entre 3 y 16 caracteres). Sin coincidencias devuelve `[]`.
+    static func search(_ text: String, perPage: Int = 30) async throws -> [CatalogItem] {
+        do {
+            let posts = try await get("search", [
+                // La API busca sobre el título tal como está guardado, con "&" escapado como entidad.
+                "q": String(text.prefix(16)).replacingOccurrences(of: "&", with: "&amp;"),
+                "postType": "any",
+                "postsPerPage": String(perPage),
+            ], as: ListingPayload.self).posts
+            // Solo mostramos lo que la app sabe abrir (no episodios sueltos, etc.).
+            return posts.filter { ContentKind(rawValue: $0.type) != nil }
+        } catch APIError.empty {
+            return []
+        }
     }
 
     /// Fuentes de reproducción de una película o episodio.

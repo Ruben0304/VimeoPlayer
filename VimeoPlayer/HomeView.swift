@@ -41,26 +41,46 @@ final class HomeViewModel: ObservableObject {
     }
 }
 
+@MainActor
+final class SearchViewModel: ObservableObject {
+    enum State { case idle, tooShort, loading, results([CatalogItem]), empty, failed }
+
+    @Published private(set) var state = State.idle
+
+    /// Se llama con cada cambio del texto; la tarea anterior se cancela sola.
+    func run(_ raw: String) async {
+        let query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if query.isEmpty { state = .idle; return }
+        if query.count < 3 { state = .tooShort; return }
+
+        state = .loading
+        try? await Task.sleep(for: .milliseconds(400))
+        if Task.isCancelled { return }
+        do {
+            let items = try await LaMovieAPI.search(query)
+            if Task.isCancelled { return }
+            state = items.isEmpty ? .empty : .results(items)
+        } catch {
+            if Task.isCancelled { return }
+            state = .failed
+        }
+    }
+}
+
 struct HomeView: View {
+    @StateObject private var search = SearchViewModel()
+    @State private var query = ""
+
     @StateObject private var model = HomeViewModel()
 
     var body: some View {
         NavigationStack {
-            Group {
-                switch model.state {
-                case .loading where model.shelves.isEmpty:
-                    ProgressView("Cargando catálogo…")
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                case .failed:
-                    VStack(spacing: 12) {
-                        Image(systemName: "wifi.exclamationmark").font(.largeTitle)
-                        Text("No se pudo cargar el catálogo").font(.headline)
-                        Button("Reintentar") { Task { await model.load() } }
-                            .buttonStyle(.borderedProminent)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                default:
-                    content
+            VStack(spacing: 0) {
+                searchBar
+                if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    catalog
+                } else {
+                    SearchResultsView(state: search.state)
                 }
             }
             .background(Color.black)
@@ -70,6 +90,46 @@ struct HomeView: View {
         }
         .preferredColorScheme(.dark)
         .task { await model.load() }
+        .task(id: query) { await search.run(query) }
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Buscar películas, series y animes", text: $query)
+                .textFieldStyle(.plain)
+                .autocorrectionDisabled()
+            if !query.isEmpty {
+                Button { query = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(10)
+        .background(Color(white: 0.15), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
+    }
+
+    private var catalog: some View {
+        Group {
+            switch model.state {
+            case .loading where model.shelves.isEmpty:
+                ProgressView("Cargando catálogo…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .failed:
+                VStack(spacing: 12) {
+                    Image(systemName: "wifi.exclamationmark").font(.largeTitle)
+                    Text("No se pudo cargar el catálogo").font(.headline)
+                    Button("Reintentar") { Task { await model.load() } }
+                        .buttonStyle(.borderedProminent)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            default:
+                content
+            }
+        }
     }
 
     private var content: some View {
@@ -96,6 +156,44 @@ private extension View {
         #else
         self
         #endif
+    }
+}
+
+// MARK: - Search results
+
+private struct SearchResultsView: View {
+    let state: SearchViewModel.State
+
+    var body: some View {
+        switch state {
+        case .idle, .loading:
+            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .tooShort:
+            message("Escribe al menos 3 caracteres", systemImage: "text.cursor")
+        case .empty:
+            message("No se encontraron resultados", systemImage: "magnifyingglass")
+        case .failed:
+            message("No se pudo completar la búsqueda", systemImage: "wifi.exclamationmark")
+        case .results(let items):
+            ScrollView {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 12, alignment: .top)], alignment: .leading, spacing: 16) {
+                    ForEach(items) { item in
+                        NavigationLink(value: item) { PosterCard(item: item) }
+                            .buttonStyle(.plain)
+                    }
+                }
+                .padding(20)
+            }
+        }
+    }
+
+    private func message(_ text: String, systemImage: String) -> some View {
+        VStack(spacing: 10) {
+            Image(systemName: systemImage).font(.largeTitle)
+            Text(text).font(.headline)
+        }
+        .foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
