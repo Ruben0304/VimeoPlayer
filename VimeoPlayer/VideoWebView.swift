@@ -38,6 +38,11 @@ private func makeWebView(url: URL) -> WKWebView {
     configuration.mediaTypesRequiringUserActionForPlayback = []
     #endif
 
+    #if os(macOS)
+    // Permite el botón de pantalla completa del reproductor web.
+    configuration.preferences.isElementFullscreenEnabled = true
+    #endif
+
     let webView = WKWebView(frame: .zero, configuration: configuration)
     #if os(macOS)
     webView.setValue(false, forKey: "drawsBackground")

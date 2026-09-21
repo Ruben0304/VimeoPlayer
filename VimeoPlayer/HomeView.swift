@@ -68,6 +68,7 @@ final class SearchViewModel: ObservableObject {
 }
 
 struct HomeView: View {
+    @EnvironmentObject private var coordinator: PlaybackCoordinator
     @StateObject private var search = SearchViewModel()
     @State private var query = ""
 
@@ -89,12 +90,14 @@ struct HomeView: View {
                 searchBar
             }
             .navigationDestination(for: CatalogItem.self) { DetailView(item: $0) }
-            .navigationDestination(for: PlaybackTarget.self) { PlayerLoaderView(target: $0) }
             .hidingNavigationBar()
         }
         .preferredColorScheme(.dark)
         .task { await model.load() }
         .task(id: query) { await search.run(query) }
+        #if os(iOS)
+        .fullScreenCover(item: $coordinator.target) { PlayerCover(target: $0) }
+        #endif
     }
 
     /// Flota sobre el contenido, como la barra de búsqueda de la app Apple TV.
@@ -252,7 +255,7 @@ private struct HeroView: View {
                         .frame(maxWidth: 560, alignment: .leading)
                 }
                 HStack(spacing: 12) {
-                    NavigationLink(value: PlaybackTarget(postId: item.id, title: item.displayTitle)) {
+                    PlayButton(target: PlaybackTarget(postId: item.id, title: item.displayTitle)) {
                         GlassButtonLabel(title: "Reproducir", systemImage: "play.fill", prominent: true)
                     }
                     NavigationLink(value: item) {
@@ -376,7 +379,7 @@ struct DetailView: View {
 
                     if !isSeries {
                         HStack(spacing: 12) {
-                            NavigationLink(value: PlaybackTarget(postId: item.id, title: item.displayTitle)) {
+                            PlayButton(target: PlaybackTarget(postId: item.id, title: item.displayTitle)) {
                                 GlassButtonLabel(title: "Reproducir", systemImage: "play.fill", prominent: true)
                             }
                             Button {
@@ -467,7 +470,7 @@ struct DetailView: View {
         ForEach(episodes) { episode in
             let title = "\(item.displayTitle) · T\(episode.seasonNumber) E\(episode.episodeNumber)"
             HStack(spacing: 8) {
-                NavigationLink(value: PlaybackTarget(postId: episode.id, title: title)) {
+                PlayButton(target: PlaybackTarget(postId: episode.id, title: title)) {
                     EpisodeRow(episode: episode)
                 }
                 .buttonStyle(.plain)

@@ -6,6 +6,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A1000000000000000000009A /* StreamProxy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000008A /* StreamProxy.swift */; };
+		A10000000000000000000099 /* LocalHTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000089 /* LocalHTTPServer.swift */; };
+		A10000000000000000000098 /* SegmentDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000088 /* SegmentDownloader.swift */; };
+		A10000000000000000000097 /* HLS.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000087 /* HLS.swift */; };
 		A10000000000000000000096 /* SeasonDownload.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000086 /* SeasonDownload.swift */; };
 		A10000000000000000000095 /* Downloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000085 /* Downloads.swift */; };
 		A10000000000000000000094 /* Glass.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000084 /* Glass.swift */; };
@@ -17,11 +21,13 @@
 		A10000000000000000000013 /* VideoWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000003 /* VideoWebView.swift */; };
 		A10000000000000000000014 /* NativePlayerModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000006 /* NativePlayerModel.swift */; };
 		A10000000000000000000015 /* NativePlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000007 /* NativePlayerView.swift */; };
-		A10000000000000000000016 /* VODProxy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000008 /* VODProxy.swift */; };
-		A10000000000000000000017 /* WebStreamFetcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000009 /* WebStreamFetcher.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A1000000000000000000008A /* StreamProxy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamProxy.swift; sourceTree = "<group>"; };
+		A10000000000000000000089 /* LocalHTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHTTPServer.swift; sourceTree = "<group>"; };
+		A10000000000000000000088 /* SegmentDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentDownloader.swift; sourceTree = "<group>"; };
+		A10000000000000000000087 /* HLS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLS.swift; sourceTree = "<group>"; };
 		A10000000000000000000086 /* SeasonDownload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeasonDownload.swift; sourceTree = "<group>"; };
 		A10000000000000000000085 /* Downloads.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Downloads.swift; sourceTree = "<group>"; };
 		A10000000000000000000084 /* Glass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Glass.swift; sourceTree = "<group>"; };
@@ -35,8 +41,6 @@
 		A10000000000000000000005 /* VimeoPlayer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VimeoPlayer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000006 /* NativePlayerModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlayerModel.swift; sourceTree = "<group>"; };
 		A10000000000000000000007 /* NativePlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlayerView.swift; sourceTree = "<group>"; };
-		A10000000000000000000008 /* VODProxy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VODProxy.swift; sourceTree = "<group>"; };
-		A10000000000000000000009 /* WebStreamFetcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebStreamFetcher.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -45,7 +49,7 @@
 
 /* Begin PBXGroup section */
 		A10000000000000000000031 = {isa = PBXGroup; children = (A10000000000000000000032 /* VimeoPlayer */, A10000000000000000000033 /* Products */); sourceTree = "<group>"; };
-		A10000000000000000000032 /* VimeoPlayer */ = {isa = PBXGroup; children = (A10000000000000000000001 /* VimeoPlayerApp.swift */, A10000000000000000000002 /* ContentView.swift */, A10000000000000000000086 /* SeasonDownload.swift */, A10000000000000000000085 /* Downloads.swift */, A10000000000000000000084 /* Glass.swift */, A10000000000000000000083 /* Playback.swift */, A10000000000000000000082 /* HomeView.swift */, A10000000000000000000081 /* Catalog.swift */, A10000000000000000000003 /* VideoWebView.swift */, A10000000000000000000006 /* NativePlayerModel.swift */, A10000000000000000000007 /* NativePlayerView.swift */, A10000000000000000000008 /* VODProxy.swift */, A10000000000000000000009 /* WebStreamFetcher.swift */, A10000000000000000000004 /* VimeoPlayer.entitlements */); path = VimeoPlayer; sourceTree = "<group>"; };
+		A10000000000000000000032 /* VimeoPlayer */ = {isa = PBXGroup; children = (A10000000000000000000001 /* VimeoPlayerApp.swift */, A10000000000000000000002 /* ContentView.swift */, A1000000000000000000008A /* StreamProxy.swift */, A10000000000000000000089 /* LocalHTTPServer.swift */, A10000000000000000000088 /* SegmentDownloader.swift */, A10000000000000000000087 /* HLS.swift */, A10000000000000000000086 /* SeasonDownload.swift */, A10000000000000000000085 /* Downloads.swift */, A10000000000000000000084 /* Glass.swift */, A10000000000000000000083 /* Playback.swift */, A10000000000000000000082 /* HomeView.swift */, A10000000000000000000081 /* Catalog.swift */, A10000000000000000000003 /* VideoWebView.swift */, A10000000000000000000006 /* NativePlayerModel.swift */, A10000000000000000000007 /* NativePlayerView.swift */, A10000000000000000000004 /* VimeoPlayer.entitlements */); path = VimeoPlayer; sourceTree = "<group>"; };
 		A10000000000000000000033 /* Products */ = {isa = PBXGroup; children = (A10000000000000000000005 /* VimeoPlayer.app */); name = Products; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
@@ -62,7 +66,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		A10000000000000000000020 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000011 /* VimeoPlayerApp.swift in Sources */, A10000000000000000000012 /* ContentView.swift in Sources */, A10000000000000000000096 /* SeasonDownload.swift in Sources */, A10000000000000000000095 /* Downloads.swift in Sources */, A10000000000000000000094 /* Glass.swift in Sources */, A10000000000000000000093 /* Playback.swift in Sources */, A10000000000000000000092 /* HomeView.swift in Sources */, A10000000000000000000091 /* Catalog.swift in Sources */, A10000000000000000000013 /* VideoWebView.swift in Sources */, A10000000000000000000014 /* NativePlayerModel.swift in Sources */, A10000000000000000000015 /* NativePlayerView.swift in Sources */, A10000000000000000000016 /* VODProxy.swift in Sources */, A10000000000000000000017 /* WebStreamFetcher.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000020 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A10000000000000000000011 /* VimeoPlayerApp.swift in Sources */, A10000000000000000000012 /* ContentView.swift in Sources */, A1000000000000000000009A /* StreamProxy.swift in Sources */, A10000000000000000000099 /* LocalHTTPServer.swift in Sources */, A10000000000000000000098 /* SegmentDownloader.swift in Sources */, A10000000000000000000097 /* HLS.swift in Sources */, A10000000000000000000096 /* SeasonDownload.swift in Sources */, A10000000000000000000095 /* Downloads.swift in Sources */, A10000000000000000000094 /* Glass.swift in Sources */, A10000000000000000000093 /* Playback.swift in Sources */, A10000000000000000000092 /* HomeView.swift in Sources */, A10000000000000000000091 /* Catalog.swift in Sources */, A10000000000000000000013 /* VideoWebView.swift in Sources */, A10000000000000000000014 /* NativePlayerModel.swift in Sources */, A10000000000000000000015 /* NativePlayerView.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
