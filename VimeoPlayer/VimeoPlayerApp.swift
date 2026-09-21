@@ -8,6 +8,13 @@ struct VimeoPlayerApp: App {
         }
         #if os(macOS)
         .defaultSize(width: 1280, height: 720)
+        .windowStyle(.hiddenTitleBar)
+        #endif
+
+        #if os(macOS)
+        Settings {
+            SettingsView()
+        }
         #endif
     }
 }

@@ -2,4 +2,5 @@
 xcuserdata/
 *.xcuserstate
 build/
+build_mac/
 DerivedData/

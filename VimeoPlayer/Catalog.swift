@@ -12,17 +12,20 @@ enum ContentKind: String {
     }
 }
 
-struct CatalogImages: Decodable, Hashable {
+struct CatalogImages: Codable, Hashable {
     let poster: String?
     let backdrop: String?
+    let logo: String?
 
     var posterURL: URL? { LaMovieAPI.imageURL(poster) }
     var backdropURL: URL? { LaMovieAPI.imageURL(backdrop) }
+    var logoURL: URL? { LaMovieAPI.imageURL(logo) }
 }
 
-struct CatalogItem: Decodable, Identifiable, Hashable {
+struct CatalogItem: Codable, Identifiable, Hashable {
     let id: Int
     let title: String
+    let originalTitle: String?
     let overview: String
     let slug: String
     let images: CatalogImages
@@ -36,7 +39,7 @@ struct CatalogItem: Decodable, Identifiable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case id = "_id", title, overview, slug, images, rating, genres, type
-        case releaseDate = "release_date", runtime, tagline, certification
+        case originalTitle = "original_title", releaseDate = "release_date", runtime, tagline, certification
     }
 
     init(from decoder: Decoder) throws {
@@ -46,10 +49,11 @@ struct CatalogItem: Decodable, Identifiable, Hashable {
         slug = try c.decode(String.self, forKey: .slug)
         type = (try? c.decode(String.self, forKey: .type)) ?? ""
         overview = (try? c.decode(String.self, forKey: .overview)) ?? ""
-        images = (try? c.decode(CatalogImages.self, forKey: .images)) ?? CatalogImages(poster: nil, backdrop: nil)
+        images = (try? c.decode(CatalogImages.self, forKey: .images)) ?? CatalogImages(poster: nil, backdrop: nil, logo: nil)
         genres = (try? c.decode([Int].self, forKey: .genres)) ?? []
         rating = Self.lenientString(c, .rating)
         runtime = Self.lenientString(c, .runtime)
+        originalTitle = try? c.decodeIfPresent(String.self, forKey: .originalTitle)
         releaseDate = try? c.decodeIfPresent(String.self, forKey: .releaseDate)
         tagline = try? c.decodeIfPresent(String.self, forKey: .tagline)
         certification = try? c.decodeIfPresent(String.self, forKey: .certification)
@@ -95,6 +99,25 @@ struct CatalogItem: Decodable, Identifiable, Hashable {
 
     static func == (lhs: CatalogItem, rhs: CatalogItem) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
+
+    /// Manual porque `init(from:)` es personalizado (el sintetizado no se genera).
+    /// Se usa para persistir "vistos recientemente" en `UserDefaults`.
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(title, forKey: .title)
+        try c.encodeIfPresent(originalTitle, forKey: .originalTitle)
+        try c.encode(overview, forKey: .overview)
+        try c.encode(slug, forKey: .slug)
+        try c.encode(images, forKey: .images)
+        try c.encodeIfPresent(rating, forKey: .rating)
+        try c.encode(genres, forKey: .genres)
+        try c.encode(type, forKey: .type)
+        try c.encodeIfPresent(releaseDate, forKey: .releaseDate)
+        try c.encodeIfPresent(runtime, forKey: .runtime)
+        try c.encodeIfPresent(tagline, forKey: .tagline)
+        try c.encodeIfPresent(certification, forKey: .certification)
+    }
 }
 
 /// Los géneros llegan como IDs; la web los define en su HTML (`siteConfig`).
@@ -200,9 +223,9 @@ enum LaMovieAPI {
         return payload
     }
 
-    static func listing(_ kind: ContentKind, orderBy: String = "latest", perPage: Int = 21) async throws -> [CatalogItem] {
+    static func listing(_ kind: ContentKind, orderBy: String = "latest", perPage: Int = 21, page: Int = 1) async throws -> [CatalogItem] {
         try await get("listing/" + kind.rawValue, [
-            "page": "1",
+            "page": String(page),
             "orderBy": orderBy,
             "order": "desc",
             "postType": kind.rawValue,

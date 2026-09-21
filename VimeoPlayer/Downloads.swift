@@ -16,6 +16,29 @@ enum Clipboard {
     }
 }
 
+/// Categoría de filtrado de descargas: por calidad/origen, no por tipo de enlace
+/// (torrents y directos se mezclan dentro de cada una).
+enum DownloadCategory: String, CaseIterable, Identifiable {
+    case all = "Todos"
+    case fourK = "4K"
+    case webDL = "WEB-DL"
+    case other = "Otros"
+
+    var id: String { rawValue }
+}
+
+extension DownloadLink {
+    /// Deducida del texto de calidad/servidor: no hay un campo dedicado en la API.
+    var category: DownloadCategory {
+        let text = (qualityText + " " + serverText).lowercased()
+        if resolution >= 2160 || text.contains("4k") { return .fourK }
+        if text.contains("web-dl") || text.contains("webdl") || text.contains(" web ") || text.hasPrefix("web ") {
+            return .webDL
+        }
+        return .other
+    }
+}
+
 /// Hoja con todas las opciones de descarga de una película o episodio.
 struct DownloadSheet: View {
     let target: PlaybackTarget
@@ -27,6 +50,7 @@ struct DownloadSheet: View {
     @State private var resolvingID: String?
     @State private var copiedID: String?
     @State private var toast: Toast?
+    @State private var category: DownloadCategory = .all
 
     var body: some View {
         ZStack {
@@ -39,31 +63,40 @@ struct DownloadSheet: View {
         .toast($toast)
         .preferredColorScheme(.dark)
         #if os(macOS)
-        .frame(minWidth: 460, minHeight: 540)
+        .frame(minWidth: 480, minHeight: 560)
         #endif
         .task { await load() }
     }
 
     private var background: some View {
-        LinearGradient(colors: [Color(white: 0.16), .black], startPoint: .top, endPoint: .bottom)
+        LinearGradient(colors: [Color(white: 0.14), .black], startPoint: .top, endPoint: .bottom)
             .ignoresSafeArea()
     }
 
     private var header: some View {
         HStack(alignment: .top, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Descargar").font(.title.bold())
+                Text("Descargar")
+                    .font(.system(size: 26, weight: .bold, design: .rounded))
                 Text(target.title)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             }
             Spacer(minLength: 0)
-            Button { dismiss() } label: { GlassIconLabel(systemImage: "xmark", size: 36) }
-                .buttonStyle(.plain)
-                .keyboardShortcut(.cancelAction)
+            Button { dismiss() } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 13, weight: .bold))
+                    .padding(9)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.interactive(), in: Circle())
+            .keyboardShortcut(.cancelAction)
         }
-        .padding(20)
+        .padding(.horizontal, 22)
+        .padding(.top, 22)
+        .padding(.bottom, 14)
     }
 
     @ViewBuilder
@@ -72,15 +105,23 @@ struct DownloadSheet: View {
             if links.isEmpty {
                 message("No hay descargas disponibles", systemImage: "arrow.down.circle.dotted")
             } else {
-                list(links)
+                VStack(spacing: 0) {
+                    categoryPicker(availableIn: links)
+                    list(filtered(links))
+                }
             }
         } else if failed {
             VStack(spacing: 12) {
                 message("No se pudieron cargar las descargas", systemImage: "wifi.exclamationmark")
                 Button { Task { await load() } } label: {
-                    GlassButtonLabel(title: "Reintentar", systemImage: "arrow.clockwise")
+                    Label("Reintentar", systemImage: "arrow.clockwise")
+                        .font(.headline)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 10)
+                        .contentShape(Capsule())
                 }
                 .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: Capsule())
             }
             .frame(maxHeight: .infinity)
         } else {
@@ -88,24 +129,57 @@ struct DownloadSheet: View {
         }
     }
 
+    /// Segmentado nativo tipo macOS; solo muestra pestañas con enlaces reales.
+    private func categoryPicker(availableIn links: [DownloadLink]) -> some View {
+        let present = Set(links.map(\.category))
+        let categories = DownloadCategory.allCases.filter { $0 == .all || present.contains($0) }
+        return Group {
+            if categories.count > 2 {
+                Picker("Filtrar", selection: $category) {
+                    ForEach(categories) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 22)
+                .padding(.bottom, 14)
+            }
+        }
+        .onAppear {
+            if !categories.contains(category) { category = .all }
+        }
+    }
+
+    private func filtered(_ links: [DownloadLink]) -> [DownloadLink] {
+        category == .all ? links : links.filter { $0.category == category }
+    }
+
     private func list(_ links: [DownloadLink]) -> some View {
         let torrents = links.filter(\.isTorrent).sorted { $0.resolution > $1.resolution }
         let direct = links.filter { !$0.isTorrent }.sorted { $0.resolution > $1.resolution }
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                section("Torrent", footer: "Se abre en tu cliente de torrents.", links: torrents)
-                section("Descarga directa", footer: "MediaFire copia el enlace directo al portapapeles; el resto se abre en el navegador.", links: direct)
+        return Group {
+            if links.isEmpty {
+                message("No hay enlaces en esta categoría", systemImage: "line.3.horizontal.decrease.circle")
+            } else {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        section("Torrent", footer: "Se abre en tu cliente de torrents.", links: torrents)
+                        section("Descarga directa", footer: "MediaFire copia el enlace directo al portapapeles; el resto se abre en el navegador.", links: direct)
+                    }
+                    .padding(.horizontal, 22)
+                    .padding(.bottom, 24)
+                }
             }
-            .padding(.horizontal, 20)
-            .padding(.bottom, 24)
         }
+        .id(category)
+        .transition(.opacity.combined(with: .move(edge: .trailing)))
+        .animation(.easeOut(duration: 0.22), value: category)
     }
 
     @ViewBuilder
     private func section(_ title: String, footer: String, links: [DownloadLink]) -> some View {
         if !links.isEmpty {
             VStack(alignment: .leading, spacing: 10) {
-                Text(title).font(.title3.weight(.bold))
+                Text(title)
+                    .font(.system(.title3, design: .rounded).weight(.bold))
                 ForEach(links) { link in row(link) }
                 Text(footer).font(.footnote).foregroundStyle(.secondary)
             }
@@ -127,7 +201,13 @@ struct DownloadSheet: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
-                if link.hasSubtitles { GlassChip(text: "SUB") }
+                if link.hasSubtitles {
+                    Text("SUB")
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .glassEffect(.regular, in: Capsule())
+                }
                 if let size = link.size, !size.isEmpty {
                     Text(size).font(.subheadline.monospacedDigit()).foregroundStyle(.secondary)
                 }
@@ -136,10 +216,10 @@ struct DownloadSheet: View {
             .padding(.horizontal, 16)
             .padding(.vertical, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .glass(in: RoundedRectangle(cornerRadius: 22, style: .continuous), interactive: true)
-            .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
         .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .contextMenu {
             Button("Copiar enlace", systemImage: "doc.on.doc") { Clipboard.copy(link.url) }
         }
