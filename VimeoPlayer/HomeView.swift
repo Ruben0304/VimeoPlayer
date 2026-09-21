@@ -552,6 +552,11 @@ struct HomeView: View {
                 }
             }
             .navigationSplitViewStyle(.balanced)
+            #if os(macOS)
+            // En pantalla completa la barra de herramientas dejaba una franja gris arriba.
+            .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+            .scrollEdgeEffectHidden(true, for: .top)
+            #endif
         }
         .environmentObject(router)
         .environmentObject(recentlyViewed)
@@ -1793,10 +1798,9 @@ private struct HeroView: View {
 
     #if os(iOS)
     private let centered = true
-    private let heroHeight: CGFloat = 700
+    private let heroHeight: CGFloat = 650
     #else
     private let centered = false
-    private let heroHeight: CGFloat = 740
     #endif
 
     var body: some View {
@@ -1808,15 +1812,16 @@ private struct HeroView: View {
                 let minY = proxy.frame(in: .named(HeroScroll.space)).minY
                 let height = proxy.size.height
                 let pull = max(0, minY)
-                let extra = height * 0.3
-                let shift = min(max(0, -minY) * 0.5, extra)
+                // Sin margen extra: la imagen baja dentro del hero al hacer scroll, y el hueco que
+                // deja arriba queda siempre fuera de la pantalla (el hero ya subió más que eso).
+                let shift = max(0, -minY) * 0.5
                 Color(white: 0.05)
                     .overlay {
                         PosterImage(url: tmdbBackdropURL, category: .backdrop)
                             .aspectRatio(contentMode: .fill)
                     }
-                    .frame(width: proxy.size.width, height: height + extra + pull)
-                    .offset(y: -extra + shift - pull)
+                    .frame(width: proxy.size.width, height: height + pull)
+                    .offset(y: shift - pull)
             }
             .clipped()
 
@@ -1886,7 +1891,13 @@ private struct HeroView: View {
             .offset(y: isActive ? 0 : 14)
             .animation(isActive ? .easeOut(duration: 0.6).delay(0.5) : .easeIn(duration: 0.3), value: isActive)
         }
+        #if os(macOS)
+        // Misma relación de aspecto que los fondos de TMDB (16:9): la imagen se ve completa.
+        .frame(maxWidth: .infinity)
+        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        #else
         .frame(height: heroHeight)
+        #endif
         .task(id: shouldLoad) {
             guard shouldLoad, tmdbBackdropURL == nil else { return }
             async let images = TMDBService.shared.images(for: item)
