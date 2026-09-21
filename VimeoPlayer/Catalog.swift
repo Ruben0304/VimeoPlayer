@@ -313,6 +313,37 @@ struct DownloadLink: Decodable, Identifiable, Hashable {
     }
 }
 
+/// Nivel de calidad de vídeo, al estilo de las etiquetas de las plataformas de streaming.
+enum QualityTier: Int, Comparable, Hashable {
+    case hd, fullHD, uhd4K
+
+    static func < (lhs: QualityTier, rhs: QualityTier) -> Bool { lhs.rawValue < rhs.rawValue }
+
+    var label: String {
+        switch self {
+        case .hd: "HD"
+        case .fullHD: "FULL HD"
+        case .uhd4K: "4K"
+        }
+    }
+
+    init?(resolution: Int) {
+        switch resolution {
+        case 2160...: self = .uhd4K
+        case 1080...: self = .fullHD
+        case 720...: self = .hd
+        default: return nil
+        }
+    }
+}
+
+extension Array where Element == DownloadLink {
+    /// Niveles de calidad únicos disponibles, de mayor a menor.
+    var qualityTiers: [QualityTier] {
+        Set(compactMap { QualityTier(resolution: $0.resolution) }).sorted(by: >)
+    }
+}
+
 struct Embed: Decodable, Hashable {
     let url: String
     let server: String?

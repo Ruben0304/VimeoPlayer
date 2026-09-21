@@ -1,12 +1,34 @@
 import SwiftUI
 
-/// Resuelve el logo de título (PNG transparente) de TMDB para una película/serie,
+/// Reparto (actor + personaje) devuelto por TMDB.
+struct CastMember: Identifiable, Hashable {
+    let id: Int
+    let name: String
+    let character: String?
+    let profileURL: URL?
+}
+
+/// Imágenes de TMDB resueltas para un título (logo, portada, fondo).
+struct TMDBImages: Equatable {
+    var logo: URL?
+    var poster: URL?
+    var backdrop: URL?
+}
+
+/// Ficha de TMDB (sinopsis en español y reparto) para un título.
+struct TMDBDetails: Equatable {
+    var overview: String?
+    var cast: [CastMember]
+}
+
+/// Resuelve portadas, sinopsis y reparto de TMDB para una película/serie,
 /// con cache en memoria por título para no repetir peticiones.
 @MainActor
 final class TMDBService {
     static let shared = TMDBService()
 
-    private var cache: [String: URL?] = [:]
+    private var imagesCache: [String: TMDBImages] = [:]
+    private var detailsCache: [String: TMDBDetails] = [:]
     private var apiKey: String { UserDefaults.standard.string(forKey: "tmdbKey") ?? "" }
 
     private struct SearchResult: Decodable { let id: Int }
@@ -23,28 +45,71 @@ final class TMDBService {
         }
     }
 
-    private struct ImagesResponse: Decodable { let logos: [Logo] }
+    private struct ImagesResponse: Decodable { let logos: [Logo]; let posters: [Logo]; let backdrops: [Logo] }
 
-    /// `nil` si no hay clave configurada, no se encontró el título o no tiene logo.
-    func logoURL(for item: CatalogItem) async -> URL? {
-        guard !apiKey.isEmpty else { return nil }
+    private struct DetailsPayload: Decodable { let overview: String?; let credits: CreditsPayload? }
+    private struct CreditsPayload: Decodable { let cast: [CastEntry] }
+    private struct CastEntry: Decodable {
+        let id: Int
+        let name: String
+        let character: String?
+        let profilePath: String?
 
-        let cacheKey = "\(item.kind.rawValue)|\(item.originalTitle ?? item.displayTitle)|\(item.year ?? "")"
-        if let cached = cache[cacheKey] { return cached }
+        enum CodingKeys: String, CodingKey { case id, name, character, profilePath = "profile_path" }
+    }
 
-        var titlesToTry = [item.originalTitle, item.displayTitle].compactMap { $0 }
+    private func cacheKey(for item: CatalogItem) -> String {
+        "\(item.kind.rawValue)|\(item.originalTitle ?? item.displayTitle)|\(item.year ?? "")"
+    }
+
+    private func titlesToTry(for item: CatalogItem) -> [String] {
+        var titles = [item.originalTitle, item.displayTitle].compactMap { $0 }
         // Sin duplicar si son iguales.
-        if titlesToTry.count == 2, titlesToTry[0] == titlesToTry[1] { titlesToTry.removeLast() }
+        if titles.count == 2, titles[0] == titles[1] { titles.removeLast() }
+        return titles
+    }
 
-        for title in titlesToTry {
+    /// Logo, portada y fondo de TMDB. Valores `nil` si no hay clave configurada,
+    /// no se encontró el título o no tiene esa imagen.
+    func images(for item: CatalogItem) async -> TMDBImages {
+        guard !apiKey.isEmpty else { return TMDBImages() }
+
+        let cacheKey = cacheKey(for: item)
+        if let cached = imagesCache[cacheKey] { return cached }
+
+        for title in titlesToTry(for: item) {
             if let id = await searchID(kind: item.kind, title: title, year: item.year),
-               let url = await bestLogo(kind: item.kind, id: id) {
-                cache[cacheKey] = url
-                return url
+               let images = await fetchImages(kind: item.kind, id: id) {
+                imagesCache[cacheKey] = images
+                return images
             }
         }
-        cache[cacheKey] = URL?.none
+        let empty = TMDBImages()
+        imagesCache[cacheKey] = empty
+        return empty
+    }
+
+    /// Sinopsis (en español) y reparto de TMDB. `nil` si no hay clave configurada
+    /// o no se encontró el título.
+    func details(for item: CatalogItem) async -> TMDBDetails? {
+        guard !apiKey.isEmpty else { return nil }
+
+        let cacheKey = cacheKey(for: item)
+        if let cached = detailsCache[cacheKey] { return cached }
+
+        for title in titlesToTry(for: item) {
+            if let id = await searchID(kind: item.kind, title: title, year: item.year),
+               let details = await fetchDetails(kind: item.kind, id: id) {
+                detailsCache[cacheKey] = details
+                return details
+            }
+        }
         return nil
+    }
+
+    /// Compatibilidad: solo el logo (usado por `TitleLogo`).
+    func logoURL(for item: CatalogItem) async -> URL? {
+        await images(for: item).logo
     }
 
     private func searchID(kind: ContentKind, title: String, year: String?) async -> Int? {
@@ -66,7 +131,7 @@ final class TMDBService {
         return decoded.results.first?.id
     }
 
-    private func bestLogo(kind: ContentKind, id: Int) async -> URL? {
+    private func fetchImages(kind: ContentKind, id: Int) async -> TMDBImages? {
         let isMovie = kind == .movies
         var components = URLComponents(string: "https://api.themoviedb.org/3/\(isMovie ? "movie" : "tv")/\(id)/images")!
         components.queryItems = [
@@ -88,19 +153,46 @@ final class TMDBService {
             default: 3
             }
         }
+        func best(_ logos: [Logo], excludeSVG: Bool) -> URL? {
+            let sorted = logos
+                .filter { !excludeSVG || !$0.filePath.lowercased().hasSuffix(".svg") }
+                .sorted { lhs, rhs in
+                    let lhsRank = languageRank(lhs.iso6391), rhsRank = languageRank(rhs.iso6391)
+                    if lhsRank != rhsRank { return lhsRank < rhsRank }
+                    if lhs.voteAverage != rhs.voteAverage { return lhs.voteAverage > rhs.voteAverage }
+                    return lhs.width > rhs.width
+                }
+            guard let first = sorted.first else { return nil }
+            return URL(string: "https://image.tmdb.org/t/p/w500" + first.filePath)
+        }
 
-        let best = decoded.logos
-            .filter { !$0.filePath.lowercased().hasSuffix(".svg") }
-            .sorted { lhs, rhs in
-                let lhsRank = languageRank(lhs.iso6391), rhsRank = languageRank(rhs.iso6391)
-                if lhsRank != rhsRank { return lhsRank < rhsRank }
-                if lhs.voteAverage != rhs.voteAverage { return lhs.voteAverage > rhs.voteAverage }
-                return lhs.width > rhs.width
-            }
-            .first
+        return TMDBImages(
+            logo: best(decoded.logos, excludeSVG: true),
+            poster: best(decoded.posters, excludeSVG: false),
+            backdrop: best(decoded.backdrops, excludeSVG: false)
+        )
+    }
 
-        guard let best else { return nil }
-        return URL(string: "https://image.tmdb.org/t/p/w500" + best.filePath)
+    private func fetchDetails(kind: ContentKind, id: Int) async -> TMDBDetails? {
+        let isMovie = kind == .movies
+        var components = URLComponents(string: "https://api.themoviedb.org/3/\(isMovie ? "movie" : "tv")/\(id)")!
+        components.queryItems = [
+            URLQueryItem(name: "api_key", value: apiKey),
+            URLQueryItem(name: "language", value: "es-ES"),
+            URLQueryItem(name: "append_to_response", value: "credits"),
+        ]
+
+        guard let url = components.url,
+              let (data, response) = try? await URLSession.shared.data(from: url),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let decoded = try? JSONDecoder().decode(DetailsPayload.self, from: data) else { return nil }
+
+        var cast: [CastMember] = []
+        for entry in (decoded.credits?.cast ?? []).prefix(12) {
+            let profileURL = entry.profilePath.flatMap { URL(string: "https://image.tmdb.org/t/p/w185" + $0) }
+            cast.append(CastMember(id: entry.id, name: entry.name, character: entry.character, profileURL: profileURL))
+        }
+        return TMDBDetails(overview: decoded.overview, cast: cast)
     }
 }
 
@@ -147,12 +239,31 @@ struct TitleLogo: View {
     }
 
     private func resolve() async {
-        if let tmdbURL = await TMDBService.shared.logoURL(for: item) {
+        if let tmdbURL = await TMDBService.shared.images(for: item).logo {
             withAnimation(.easeOut(duration: 0.25)) { state = .logo(tmdbURL) }
         } else if let webLogo = item.images.logoURL {
             withAnimation(.easeOut(duration: 0.25)) { state = .logo(webLogo) }
         }
         // Si no hay logo disponible, se queda el texto (ya mostrado desde el inicio).
+    }
+}
+
+/// Insignia de calidad/formato, al estilo minimalista de las fichas de Apple TV:
+/// texto en mayúsculas dentro de un recuadro con borde fino, sin relleno.
+struct QualityBadge: View {
+    let label: String
+
+    var body: some View {
+        Text(label)
+            .font(.system(size: 11, weight: .semibold))
+            .tracking(0.3)
+            .foregroundStyle(.white.opacity(0.92))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .overlay(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(.white.opacity(0.55), lineWidth: 1)
+            )
     }
 }
 
@@ -165,7 +276,7 @@ struct SettingsView: View {
         Form {
             Section {
                 SecureField("Clave de API de TMDB (v3)", text: $tmdbKey)
-                Text("Se usa para mostrar los logos de título en la portada y la ficha. Puedes conseguir una clave gratis en themoviedb.org. Se guarda solo en este equipo.")
+                Text("Se usa para mostrar los logos de título, las portadas y la ficha (sinopsis y reparto). Puedes conseguir una clave gratis en themoviedb.org. Se guarda solo en este equipo.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } header: {

@@ -560,7 +560,7 @@ private struct CategoryGridView: View {
 
     var body: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 28, alignment: .top)], alignment: .leading, spacing: 32) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 16, alignment: .top)], alignment: .leading, spacing: 20) {
                 ForEach(model.items) { item in
                     PosterCard(item: item)
                         .task { await model.loadMoreIfNeeded(currentItem: item) }
@@ -745,7 +745,7 @@ private struct SearchLandingView: View {
                                 .foregroundStyle(.white.opacity(0.5))
                         }
                         ScrollView(.horizontal, showsIndicators: false) {
-                            LazyHStack(alignment: .top, spacing: 18) {
+                            LazyHStack(alignment: .top, spacing: 16) {
                                 ForEach(recentlyViewed.items) { item in
                                     PosterCard(item: item)
                                 }
@@ -851,7 +851,7 @@ private struct SearchResultsView: View {
             message("No se pudo completar la búsqueda", systemImage: "wifi.exclamationmark")
         case .results(let items):
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 28, alignment: .top)], alignment: .leading, spacing: 32) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 16, alignment: .top)], alignment: .leading, spacing: 20) {
                     ForEach(items) { item in
                         PosterCard(item: item)
                     }
@@ -999,7 +999,7 @@ private struct ShelfView: View {
                 .foregroundStyle(.white.opacity(0.92))
                 .padding(.horizontal, 36)
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 26) {
+                LazyHStack(alignment: .top, spacing: 16) {
                     ForEach(shelf.items) { item in
                         PosterCard(item: item)
                     }
@@ -1015,17 +1015,21 @@ private struct PosterCard: View {
     let item: CatalogItem
     @State private var hovering = false
     @State private var posterFrame: CGRect = .zero
+    @State private var tmdbPosterURL: URL?
     @EnvironmentObject private var transition: PosterTransition
     @EnvironmentObject private var recentlyViewed: RecentlyViewedStore
 
+    private var posterURL: URL? { tmdbPosterURL ?? item.images.posterURL }
+
     var body: some View {
         Button {
-            transition.open(item, posterURL: item.images.posterURL, backdropURL: item.images.backdropURL, frame: posterFrame)
+            transition.open(item, posterURL: posterURL, backdropURL: item.images.backdropURL, frame: posterFrame)
             recentlyViewed.add(item)
         } label: {
             cardBody
         }
         .buttonStyle(.plain)
+        .task(id: item.id) { tmdbPosterURL = await TMDBService.shared.images(for: item).poster }
     }
 
     private var cardBody: some View {
@@ -1033,7 +1037,7 @@ private struct PosterCard: View {
             Brand.card
                 .aspectRatio(2.0 / 3.0, contentMode: .fit)
                 .overlay {
-                    PosterImage(url: item.images.posterURL)
+                    PosterImage(url: posterURL)
                         .aspectRatio(contentMode: .fill)
                         .clipped()
                 }
@@ -1068,7 +1072,7 @@ private struct PosterCard: View {
                 .lineLimit(2, reservesSpace: true)
                 .multilineTextAlignment(.leading)
         }
-        .frame(width: 160)
+        .frame(width: 190)
         // Se escala la tarjeta completa (póster + título), no solo el póster: así el
         // texto se mueve junto con la imagen en vez de quedar tapado por ella.
         .scaleEffect(hovering ? 1.1 : 1, anchor: .top)
@@ -1107,8 +1111,18 @@ struct DetailView: View {
     @State private var loadingEpisodes = false
     @State private var downloadTarget: PlaybackTarget?
     @State private var seasonRequest: SeasonDownloadRequest?
+    @State private var tmdbDetails: TMDBDetails?
+    @State private var tmdbBackdropURL: URL?
+    @State private var qualityTiers: [QualityTier] = []
+    @State private var hasWebDL = false
 
     private var isSeries: Bool { item.kind != .movies }
+
+    /// Sinopsis: se prefiere la de TMDB (en español) si está disponible.
+    private var overviewText: String {
+        if let overview = tmdbDetails?.overview, !overview.isEmpty { return overview }
+        return item.overview
+    }
 
     var body: some View {
         ZStack {
@@ -1145,8 +1159,26 @@ struct DetailView: View {
         }
         .navigationTitle(item.displayTitle)
         .task(id: season) { await loadEpisodes() }
+        .task(id: item.id) { await loadTMDBDetails() }
+        .task(id: item.id) { await loadQuality() }
         .sheet(item: $downloadTarget) { DownloadSheet(target: $0) }
         .sheet(item: $seasonRequest) { SeasonDownloadSheet(request: $0) }
+    }
+
+    private func loadTMDBDetails() async {
+        async let details = TMDBService.shared.details(for: item)
+        async let images = TMDBService.shared.images(for: item)
+        let (resolvedDetails, resolvedImages) = await (details, images)
+        tmdbDetails = resolvedDetails
+        tmdbBackdropURL = resolvedImages.backdrop ?? resolvedImages.poster
+    }
+
+    /// Solo para películas: los episodios tienen su propia calidad por enlace.
+    private func loadQuality() async {
+        guard !isSeries else { return }
+        let downloads = (try? await LaMovieAPI.downloads(postId: item.id)) ?? []
+        qualityTiers = downloads.qualityTiers
+        hasWebDL = downloads.contains { $0.category == .webDL }
     }
 
     /// Tarjeta flotante (no a pantalla completa) cuya cabecera coincide en tamaño y
@@ -1157,7 +1189,7 @@ struct DetailView: View {
                 Color(white: 0.05)
                     .aspectRatio(16.0 / 9.0, contentMode: .fit)
                     .overlay {
-                        PosterImage(url: item.images.backdropURL ?? item.images.posterURL)
+                        PosterImage(url: tmdbBackdropURL ?? item.images.backdropURL ?? item.images.posterURL)
                             .aspectRatio(contentMode: .fill)
                             .clipped()
                     }
@@ -1171,6 +1203,13 @@ struct DetailView: View {
             VStack(alignment: .leading, spacing: 18) {
                 TitleLogo(item: item, textFont: .system(size: 32, weight: .bold, design: .rounded))
                 MetaRow(item: item)
+
+                if !qualityTiers.isEmpty || hasWebDL {
+                    HStack(spacing: 6) {
+                        ForEach(qualityTiers, id: \.self) { QualityBadge(label: $0.label) }
+                        if hasWebDL { QualityBadge(label: "WEB-DL") }
+                    }
+                }
 
                 if !item.genreNames.isEmpty {
                     Text(item.genreNames.joined(separator: " · "))
@@ -1209,10 +1248,14 @@ struct DetailView: View {
                         .italic()
                         .foregroundStyle(.white.opacity(0.55))
                 }
-                if !item.overview.isEmpty {
-                    Text(item.overview)
+                if !overviewText.isEmpty {
+                    Text(overviewText)
                         .font(.body)
                         .foregroundStyle(.white.opacity(0.85))
+                }
+
+                if let cast = tmdbDetails?.cast, !cast.isEmpty {
+                    castSection(cast)
                 }
 
                 if isSeries { episodesSection }
@@ -1232,6 +1275,50 @@ struct DetailView: View {
                 .stroke(.white.opacity(0.1), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.5), radius: 30, y: 16)
+    }
+
+    @ViewBuilder
+    private func castSection(_ cast: [CastMember]) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Reparto")
+                .font(.system(.title3, design: .rounded).weight(.semibold))
+                .foregroundStyle(.white)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(alignment: .top, spacing: 16) {
+                    ForEach(cast) { member in
+                        VStack(spacing: 6) {
+                            Circle()
+                                .fill(Brand.card)
+                                .frame(width: 64, height: 64)
+                                .overlay {
+                                    AsyncImage(url: member.profileURL) { image in
+                                        image.resizable().scaledToFill()
+                                    } placeholder: {
+                                        Image(systemName: "person.fill")
+                                            .foregroundStyle(.white.opacity(0.3))
+                                    }
+                                }
+                                .clipShape(Circle())
+
+                            Text(member.name)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.85))
+                                .lineLimit(1)
+
+                            if let character = member.character, !character.isEmpty {
+                                Text(character)
+                                    .font(.caption2)
+                                    .foregroundStyle(.white.opacity(0.5))
+                                    .lineLimit(1)
+                            }
+                        }
+                        .frame(width: 84)
+                    }
+                }
+            }
+        }
+        .padding(.top, 6)
     }
 
     @ViewBuilder
