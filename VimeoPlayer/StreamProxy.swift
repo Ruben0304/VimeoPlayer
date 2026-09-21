@@ -138,7 +138,7 @@ actor StreamProxy {
     }
 
     private func startServing() async throws {
-        port = try await server.start { [weak self] path in await self?.handle(path) }
+        port = try await server.start { [weak self] path in await self?.handle(path).map(LocalHTTPServer.Reply.body) }
         for lane in 1...SegmentDownloader.prefetchLanes {
             workers.append(Task { [weak self] in
                 while !Task.isCancelled {

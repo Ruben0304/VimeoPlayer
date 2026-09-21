@@ -22,7 +22,12 @@ struct VimeoPlayerApp: App {
         .defaultSize(width: 1280, height: 720)
 
         Settings {
-            SettingsView()
+            TabView {
+                SettingsView()
+                    .tabItem { Label("TMDB", systemImage: "photo") }
+                PlayerSettingsView()
+                    .tabItem { Label("Reproductor", systemImage: "play.rectangle") }
+            }
         }
         #else
         WindowGroup {

@@ -362,6 +362,8 @@ struct Episode: Decodable, Identifiable, Hashable {
 struct PlaybackTarget: Hashable, Identifiable {
     let postId: Int
     let title: String
+    /// Si está, en vez del stream de la web se reproduce el RAR de MediaFire (solo macOS).
+    var mediaFire: URL?
 
-    var id: Int { postId }
+    var id: String { "\(postId)-\(mediaFire?.absoluteString ?? "stream")" }
 }

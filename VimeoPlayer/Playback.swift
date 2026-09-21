@@ -157,7 +157,11 @@ struct PlayerWindowHost: View {
         ZStack {
             Color.black.ignoresSafeArea()
             if let target = coordinator.target {
-                PlayerLoaderView(target: target).id(target.id)
+                if let page = target.mediaFire {
+                    RARPlayerView(target: target, pageURL: page).id(target.id)
+                } else {
+                    PlayerLoaderView(target: target).id(target.id)
+                }
             }
         }
         .ignoresSafeArea()

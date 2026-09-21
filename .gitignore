@@ -4,3 +4,5 @@ xcuserdata/
 build/
 build_mac/
 DerivedData/
+.env
+.env.*

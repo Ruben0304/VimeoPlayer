@@ -187,6 +187,22 @@ struct DownloadSheet: View {
     }
 
     private func row(_ link: DownloadLink) -> some View {
+        HStack(spacing: 8) {
+            rowButton(link)
+            #if os(macOS)
+            // MediaFire: además de copiar el enlace, se puede reproducir el RAR (1080p) desde aquí.
+            if link.isMediaFire, let page = URL(string: link.url) {
+                PlayButton(target: PlaybackTarget(postId: target.postId, title: "\(target.title) · \(link.qualityText)", mediaFire: page)) {
+                    GlassIconLabel(systemImage: "play.fill", size: 48)
+                }
+                .buttonStyle(.plain)
+                .help("Reproducir desde MediaFire")
+            }
+            #endif
+        }
+    }
+
+    private func rowButton(_ link: DownloadLink) -> some View {
         Button {
             Task { await activate(link) }
         } label: {

@@ -4,11 +4,20 @@ import SwiftUI
 struct ContentView: View {
     let embedURL: URL
     @AppStorage(PlaybackMode.storageKey) private var mode = PlaybackMode.accelerated
+    @AppStorage(PlaybackSettings.preferVLCKey) private var preferVLC = false
 
     var body: some View {
         switch mode {
         case .accelerated:
+            #if os(macOS)
+            if preferVLC {
+                VLCStreamPlayerView(embedURL: embedURL, mode: $mode)
+            } else {
+                AcceleratedPlayerView(embedURL: embedURL, mode: $mode)
+            }
+            #else
             AcceleratedPlayerView(embedURL: embedURL, mode: $mode)
+            #endif
         case .direct:
             VideoWebView(url: embedURL)
                 .ignoresSafeArea()
