@@ -73,17 +73,21 @@ struct HomeView: View {
 
     @StateObject private var model = HomeViewModel()
 
+    private var isSearching: Bool {
+        !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                searchBar
-                if query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                    catalog
-                } else {
+            ZStack(alignment: .top) {
+                Color.black.ignoresSafeArea()
+                if isSearching {
                     SearchResultsView(state: search.state)
+                } else {
+                    catalog
                 }
+                searchBar
             }
-            .background(Color.black)
             .navigationDestination(for: CatalogItem.self) { DetailView(item: $0) }
             .navigationDestination(for: PlaybackTarget.self) { PlayerLoaderView(target: $0) }
             .hidingNavigationBar()
@@ -93,6 +97,7 @@ struct HomeView: View {
         .task(id: query) { await search.run(query) }
     }
 
+    /// Flota sobre el contenido, como la barra de búsqueda de la app Apple TV.
     private var searchBar: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
@@ -106,44 +111,50 @@ struct HomeView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(10)
-        .background(Color(white: 0.15), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .glass(in: Capsule(), interactive: true)
+        .frame(maxWidth: 560)
         .padding(.horizontal, 20)
-        .padding(.vertical, 10)
+        .padding(.top, 12)
     }
 
+    @ViewBuilder
     private var catalog: some View {
-        Group {
-            switch model.state {
-            case .loading where model.shelves.isEmpty:
-                ProgressView("Cargando catálogo…")
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            case .failed:
-                VStack(spacing: 12) {
-                    Image(systemName: "wifi.exclamationmark").font(.largeTitle)
-                    Text("No se pudo cargar el catálogo").font(.headline)
-                    Button("Reintentar") { Task { await model.load() } }
-                        .buttonStyle(.borderedProminent)
-                }
+        switch model.state {
+        case .loading where model.shelves.isEmpty:
+            ProgressView("Cargando catálogo…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-            default:
-                content
+        case .failed:
+            VStack(spacing: 14) {
+                Image(systemName: "wifi.exclamationmark").font(.largeTitle)
+                Text("No se pudo cargar el catálogo").font(.headline)
+                Button { Task { await model.load() } } label: {
+                    GlassButtonLabel(title: "Reintentar", systemImage: "arrow.clockwise", prominent: true)
+                }
+                .buttonStyle(.plain)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        default:
+            content
         }
     }
 
     private var content: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 28) {
+            LazyVStack(alignment: .leading, spacing: 32) {
                 if let featured = model.featured {
                     HeroView(item: featured)
+                } else {
+                    Color.clear.frame(height: 64)
                 }
                 ForEach(model.shelves) { shelf in
                     ShelfView(shelf: shelf)
                 }
             }
-            .padding(.bottom, 32)
+            .padding(.bottom, 40)
         }
+        .ignoresSafeArea(edges: .top)
         .refreshable { await model.load() }
     }
 }
@@ -176,13 +187,15 @@ private struct SearchResultsView: View {
             message("No se pudo completar la búsqueda", systemImage: "wifi.exclamationmark")
         case .results(let items):
             ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 12, alignment: .top)], alignment: .leading, spacing: 16) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 130), spacing: 14, alignment: .top)], alignment: .leading, spacing: 20) {
                     ForEach(items) { item in
                         NavigationLink(value: item) { PosterCard(item: item) }
                             .buttonStyle(.plain)
                     }
                 }
-                .padding(20)
+                .padding(.horizontal, 20)
+                .padding(.top, 80)
+                .padding(.bottom, 24)
             }
         }
     }
@@ -214,30 +227,44 @@ private struct HeroView: View {
                 }
                 .clipped()
 
-            LinearGradient(colors: [.clear, .black], startPoint: .center, endPoint: .bottom)
+            LinearGradient(stops: [
+                .init(color: .black.opacity(0.35), location: 0),
+                .init(color: .clear, location: 0.3),
+                .init(color: .black.opacity(0.85), location: 0.85),
+                .init(color: .black, location: 1),
+            ], startPoint: .top, endPoint: .bottom)
 
-            VStack(alignment: .leading, spacing: 10) {
-                Text("LaMovie")
+            VStack(alignment: .leading, spacing: 12) {
+                Text("ESTRENO · \(item.kind.label.uppercased())")
                     .font(.caption.weight(.heavy))
                     .tracking(2)
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(.white.opacity(0.75))
                 Text(item.displayTitle)
-                    .font(.system(size: 32, weight: .bold))
+                    .font(.system(size: 44, weight: .bold))
                     .lineLimit(2)
+                    .minimumScaleFactor(0.6)
                 MetaRow(item: item)
-                NavigationLink(value: item) {
-                    Label("Ver ahora", systemImage: "play.fill")
-                        .font(.headline)
-                        .padding(.horizontal, 22)
-                        .padding(.vertical, 10)
-                        .background(.white, in: Capsule())
-                        .foregroundStyle(.black)
+                if !item.overview.isEmpty {
+                    Text(item.overview)
+                        .font(.callout)
+                        .foregroundStyle(.white.opacity(0.8))
+                        .lineLimit(3)
+                        .frame(maxWidth: 560, alignment: .leading)
+                }
+                HStack(spacing: 12) {
+                    NavigationLink(value: PlaybackTarget(postId: item.id, title: item.displayTitle)) {
+                        GlassButtonLabel(title: "Reproducir", systemImage: "play.fill", prominent: true)
+                    }
+                    NavigationLink(value: item) {
+                        GlassIconLabel(systemImage: "info", size: 46)
+                    }
                 }
                 .buttonStyle(.plain)
+                .padding(.top, 4)
             }
-            .padding(20)
+            .padding(24)
         }
-        .frame(height: 380)
+        .frame(height: 520)
     }
 }
 
@@ -247,18 +274,18 @@ private struct ShelfView: View {
     let shelf: Shelf
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             Text(shelf.title)
-                .font(.title3.weight(.bold))
-                .padding(.horizontal, 20)
+                .font(.title2.weight(.bold))
+                .padding(.horizontal, 24)
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 12) {
+                LazyHStack(alignment: .top, spacing: 14) {
                     ForEach(shelf.items) { item in
                         NavigationLink(value: item) { PosterCard(item: item) }
                             .buttonStyle(.plain)
                     }
                 }
-                .padding(.horizontal, 20)
+                .padding(.horizontal, 24)
             }
         }
     }
@@ -268,7 +295,7 @@ private struct PosterCard: View {
     let item: CatalogItem
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             Color(white: 0.15)
                 .aspectRatio(2.0 / 3.0, contentMode: .fit)
                 .overlay {
@@ -278,16 +305,17 @@ private struct PosterCard: View {
                         Image(systemName: "film").foregroundStyle(.secondary)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .shadow(color: .black.opacity(0.5), radius: 10, y: 6)
                 .overlay(alignment: .topTrailing) {
                     if let rating = item.ratingText {
                         Label(rating, systemImage: "star.fill")
                             .font(.caption2.weight(.bold))
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 3)
-                            .background(.black.opacity(0.7), in: Capsule())
                             .foregroundStyle(.yellow)
-                            .padding(6)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .glass(in: Capsule())
+                            .padding(8)
                     }
                 }
             Text(item.displayTitle)
@@ -298,7 +326,7 @@ private struct PosterCard: View {
                 Text(year).font(.caption2).foregroundStyle(.secondary)
             }
         }
-        .frame(width: 130)
+        .frame(width: 140)
     }
 }
 
@@ -326,41 +354,36 @@ struct DetailView: View {
     @State private var season: Int?
     @State private var episodes: [Episode] = []
     @State private var loadingEpisodes = false
+    @State private var downloadTarget: PlaybackTarget?
+    @State private var seasonRequest: SeasonDownloadRequest?
 
     private var isSeries: Bool { item.kind != .movies }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                Color(white: 0.1)
-                    .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                    .overlay {
-                        AsyncImage(url: item.images.backdropURL ?? item.images.posterURL) { image in
-                            image.resizable().scaledToFill()
-                        } placeholder: {
-                            Color.clear
-                        }
-                    }
-                    .clipped()
-
-                VStack(alignment: .leading, spacing: 14) {
-                    Text(item.displayTitle).font(.largeTitle.bold())
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                VStack(alignment: .leading, spacing: 16) {
                     MetaRow(item: item)
 
                     if !item.genreNames.isEmpty {
-                        Text(item.genreNames.joined(separator: " · "))
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(item.genreNames, id: \.self) { GlassChip(text: $0) }
+                            }
+                        }
                     }
 
                     if !isSeries {
-                        NavigationLink(value: PlaybackTarget(postId: item.id, title: item.displayTitle)) {
-                            Label("Reproducir", systemImage: "play.fill")
-                                .font(.headline)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .background(.white, in: RoundedRectangle(cornerRadius: 10))
-                                .foregroundStyle(.black)
+                        HStack(spacing: 12) {
+                            NavigationLink(value: PlaybackTarget(postId: item.id, title: item.displayTitle)) {
+                                GlassButtonLabel(title: "Reproducir", systemImage: "play.fill", prominent: true)
+                            }
+                            Button {
+                                downloadTarget = PlaybackTarget(postId: item.id, title: item.displayTitle)
+                            } label: {
+                                GlassButtonLabel(title: "Descargar", systemImage: "arrow.down.circle")
+                            }
                         }
                         .buttonStyle(.plain)
                     }
@@ -374,21 +397,60 @@ struct DetailView: View {
 
                     if isSeries { episodesSection }
                 }
-                .padding(.horizontal, 20)
-                .padding(.bottom, 32)
-                .frame(maxWidth: 720, alignment: .leading)
+                .padding(.horizontal, 24)
+                .padding(.top, 8)
+                .padding(.bottom, 40)
+                .frame(maxWidth: 820, alignment: .leading)
             }
         }
         .background(Color.black)
         .navigationTitle(item.displayTitle)
         .task(id: season) { await loadEpisodes() }
+        .sheet(item: $downloadTarget) { DownloadSheet(target: $0) }
+        .sheet(item: $seasonRequest) { SeasonDownloadSheet(request: $0) }
+    }
+
+    private var header: some View {
+        ZStack(alignment: .bottomLeading) {
+            Color(white: 0.1)
+                .overlay {
+                    AsyncImage(url: item.images.backdropURL ?? item.images.posterURL) { image in
+                        image.resizable().scaledToFill()
+                    } placeholder: {
+                        Color.clear
+                    }
+                }
+                .clipped()
+            LinearGradient(colors: [.clear, .black], startPoint: .center, endPoint: .bottom)
+            Text(item.displayTitle)
+                .font(.system(size: 38, weight: .bold))
+                .lineLimit(2)
+                .minimumScaleFactor(0.6)
+                .padding(.horizontal, 24)
+                .padding(.bottom, 8)
+        }
+        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        .frame(maxHeight: 460)
     }
 
     @ViewBuilder
     private var episodesSection: some View {
         HStack {
-            Text("Episodios").font(.title3.weight(.bold))
+            Text("Episodios").font(.title2.weight(.bold))
             Spacer()
+            if let season, !episodes.isEmpty {
+                Button {
+                    seasonRequest = SeasonDownloadRequest(seriesTitle: item.displayTitle, season: season, episodes: episodes)
+                } label: {
+                    Label("Descargar temporada", systemImage: "arrow.down.circle")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .glass(in: Capsule(), interactive: true)
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+            }
             if seasons.count > 1 {
                 Picker("Temporada", selection: $season) {
                     ForEach(seasons, id: \.self) { Text("Temporada \($0)").tag(Optional($0)) }
@@ -403,10 +465,22 @@ struct DetailView: View {
             ProgressView().frame(maxWidth: .infinity)
         }
         ForEach(episodes) { episode in
-            NavigationLink(value: PlaybackTarget(postId: episode.id, title: "\(item.displayTitle) · T\(episode.seasonNumber) E\(episode.episodeNumber)")) {
-                EpisodeRow(episode: episode)
+            let title = "\(item.displayTitle) · T\(episode.seasonNumber) E\(episode.episodeNumber)"
+            HStack(spacing: 8) {
+                NavigationLink(value: PlaybackTarget(postId: episode.id, title: title)) {
+                    EpisodeRow(episode: episode)
+                }
+                .buttonStyle(.plain)
+                Button {
+                    downloadTarget = PlaybackTarget(postId: episode.id, title: title)
+                } label: {
+                    GlassIconLabel(systemImage: "arrow.down", size: 40)
+                }
+                .buttonStyle(.plain)
+                .help("Descargar")
             }
-            .buttonStyle(.plain)
+            .padding(8)
+            .glass(in: RoundedRectangle(cornerRadius: 20, style: .continuous))
         }
     }
 
@@ -435,7 +509,7 @@ private struct EpisodeRow: View {
                         Image(systemName: "play.rectangle").foregroundStyle(.secondary)
                     }
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             VStack(alignment: .leading, spacing: 4) {
                 Text("\(episode.episodeNumber). Episodio \(episode.episodeNumber)")
                     .font(.subheadline.weight(.semibold))

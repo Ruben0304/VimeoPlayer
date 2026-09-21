@@ -163,6 +163,16 @@ enum LaMovieAPI {
 
     private struct PlayerPayload: Decodable {
         let embeds: [Embed]
+        let downloads: [DownloadLink]
+
+        enum CodingKeys: String, CodingKey { case embeds, downloads }
+
+        // Cada lista se decodifica aparte: si una falla, la otra sigue sirviendo.
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            embeds = (try? c.decode([Embed].self, forKey: .embeds)) ?? []
+            downloads = (try? c.decode([DownloadLink].self, forKey: .downloads)) ?? []
+        }
     }
 
     private struct EpisodesPayload: Decodable {
@@ -216,9 +226,18 @@ enum LaMovieAPI {
         }
     }
 
+    private static func player(postId: Int) async throws -> PlayerPayload {
+        try await get("player", ["postId": String(postId), "demo": "0"], as: PlayerPayload.self)
+    }
+
     /// Fuentes de reproducción de una película o episodio.
     static func embeds(postId: Int) async throws -> [Embed] {
-        try await get("player", ["postId": String(postId), "demo": "0"], as: PlayerPayload.self).embeds
+        try await player(postId: postId).embeds
+    }
+
+    /// Enlaces de descarga (torrents y servidores externos) de una película o episodio.
+    static func downloads(postId: Int) async throws -> [DownloadLink] {
+        try await player(postId: postId).downloads
     }
 
     /// Episodios de una temporada, y las temporadas disponibles (ascendentes).
@@ -228,6 +247,46 @@ enum LaMovieAPI {
         let payload = try await get("single/episodes/list", query, as: EpisodesPayload.self)
         return (payload.posts.sorted { $0.episodeNumber < $1.episodeNumber },
                 payload.seasons.compactMap(Int.init).sorted())
+    }
+}
+
+struct DownloadLink: Decodable, Identifiable, Hashable {
+    let url: String
+    let server: String?
+    let lang: String?
+    let quality: String?
+    let size: String?
+    let subtitle: Int?
+
+    var id: String { url }
+
+    enum CodingKeys: String, CodingKey { case url, server, lang, quality, size, subtitle }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        url = try c.decode(String.self, forKey: .url)
+        server = (try? c.decodeIfPresent(String.self, forKey: .server)) ?? nil
+        lang = (try? c.decodeIfPresent(String.self, forKey: .lang)) ?? nil
+        quality = (try? c.decodeIfPresent(String.self, forKey: .quality)) ?? nil
+        size = (try? c.decodeIfPresent(String.self, forKey: .size)) ?? nil
+        subtitle = (try? c.decodeIfPresent(Int.self, forKey: .subtitle)) ?? nil
+    }
+
+    var isTorrent: Bool { url.hasPrefix("magnet:") }
+    var hasSubtitles: Bool { subtitle == 1 }
+    var qualityText: String { (quality?.isEmpty == false ? quality : nil) ?? "Original" }
+
+    var serverText: String {
+        if isTorrent { return "Torrent" }
+        return (server?.isEmpty == false ? server : nil) ?? URL(string: url)?.host ?? "Enlace"
+    }
+
+    /// Altura en píxeles deducida de la calidad ("Dual 1080p" → 1080), para ordenar de mayor a menor.
+    var resolution: Int {
+        let text = qualityText.lowercased()
+        if text.contains("4k") { return 2160 }
+        if let range = text.range(of: #"\d{3,4}(?=p)"#, options: .regularExpression) { return Int(text[range]) ?? 0 }
+        return 0
     }
 }
 
@@ -277,7 +336,9 @@ struct Episode: Decodable, Identifiable, Hashable {
 }
 
 /// Lo que el reproductor necesita para arrancar: el post (película o episodio) y un título.
-struct PlaybackTarget: Hashable {
+struct PlaybackTarget: Hashable, Identifiable {
     let postId: Int
     let title: String
+
+    var id: Int { postId }
 }
