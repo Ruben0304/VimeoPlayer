@@ -353,6 +353,7 @@ private struct ExpandingPosterOverlay: View {
 }
 
 struct HomeView: View {
+    @EnvironmentObject private var coordinator: PlaybackCoordinator
     @StateObject private var search = SearchViewModel()
     @StateObject private var recentlyViewed = RecentlyViewedStore()
     @State private var query = ""
@@ -417,6 +418,9 @@ struct HomeView: View {
             router.path = NavigationPath()
             if selection != .search { query = "" }
         }
+        #if os(iOS)
+        .fullScreenCover(item: $coordinator.target) { PlayerCover(target: $0) }
+        #endif
     }
 
     /// Sidebar de categorías: material vibrante nativo, como los de macOS, con el
@@ -954,7 +958,7 @@ private struct HeroView: View {
                 }
 
                 HStack(spacing: 14) {
-                    NavigationLink(value: item) {
+                    PlayButton(target: PlaybackTarget(postId: item.id, title: item.displayTitle)) {
                         Label("Reproducir", systemImage: "play.fill")
                             .font(.headline)
                             .padding(.horizontal, 26)
@@ -1176,7 +1180,7 @@ struct DetailView: View {
 
                 if !isSeries {
                     HStack(spacing: 12) {
-                        NavigationLink(value: PlaybackTarget(postId: item.id, title: item.displayTitle)) {
+                        PlayButton(target: PlaybackTarget(postId: item.id, title: item.displayTitle)) {
                             Label("Reproducir", systemImage: "play.fill")
                                 .font(.headline)
                                 .frame(maxWidth: .infinity)
@@ -1267,7 +1271,7 @@ struct DetailView: View {
         ForEach(episodes) { episode in
             let episodeTitle = "\(item.displayTitle) · T\(episode.seasonNumber) E\(episode.episodeNumber)"
             HStack(spacing: 8) {
-                NavigationLink(value: PlaybackTarget(postId: episode.id, title: episodeTitle)) {
+                PlayButton(target: PlaybackTarget(postId: episode.id, title: episodeTitle)) {
                     EpisodeRow(episode: episode)
                 }
                 .buttonStyle(.plain)
