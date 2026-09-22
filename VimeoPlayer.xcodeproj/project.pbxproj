@@ -7,6 +7,7 @@
 
 /* Begin PBXBuildFile section */
 		A100000000000000000000F4 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000F3 /* AppIcon.icon */; };
+		A100000000000000000000F6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000F5 /* Assets.xcassets */; };
 		A100000000000000000000A3 /* VLCKitSPM in Frameworks */ = {isa = PBXBuildFile; platformFilter = macos; productRef = A100000000000000000000A2 /* VLCKitSPM */; };
 		A100000000000000000000D2 /* RAR5Decoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000D1 /* RAR5Decoder.swift */; };
 		A1000000000000000000009C /* RARArchive.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000008C /* RARArchive.swift */; };
@@ -35,6 +36,7 @@
 
 /* Begin PBXFileReference section */
 		A100000000000000000000F3 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
+		A100000000000000000000F5 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A100000000000000000000D1 /* RAR5Decoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RAR5Decoder.swift; sourceTree = "<group>"; };
 		A1000000000000000000008C /* RARArchive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RARArchive.swift; sourceTree = "<group>"; };
 		A1000000000000000000008D /* RARStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RARStream.swift; sourceTree = "<group>"; };
@@ -68,7 +70,7 @@
 
 /* Begin PBXGroup section */
 		A10000000000000000000031 = {isa = PBXGroup; children = (A10000000000000000000032 /* VimeoPlayer */, A10000000000000000000033 /* Products */); sourceTree = "<group>"; };
-		A10000000000000000000032 /* VimeoPlayer */ = {isa = PBXGroup; children = (A100000000000000000000F3 /* AppIcon.icon */, A100000000000000000000E1 /* WatchProgress.swift */, A100000000000000000000D1 /* RAR5Decoder.swift */, A1000000000000000000008C /* RARArchive.swift */, A1000000000000000000008D /* RARStream.swift */, A1000000000000000000008E /* MKVPlayer.swift */, A100000000000000000000C2 /* Config.swift */, A10000000000000000000001 /* VimeoPlayerApp.swift */, A10000000000000000000002 /* ContentView.swift */, A1000000000000000000008B /* TMDB.swift */, A1000000000000000000008A /* StreamProxy.swift */, A10000000000000000000089 /* LocalHTTPServer.swift */, A10000000000000000000088 /* SegmentDownloader.swift */, A10000000000000000000087 /* HLS.swift */, A10000000000000000000086 /* SeasonDownload.swift */, A10000000000000000000085 /* Downloads.swift */, A10000000000000000000084 /* Glass.swift */, A100000000000000000000F0 /* StreamingSidebar.swift */, A10000000000000000000083 /* Playback.swift */, A10000000000000000000082 /* HomeView.swift */, A10000000000000000000081 /* Catalog.swift */, A10000000000000000000003 /* VideoWebView.swift */, A10000000000000000000006 /* NativePlayerModel.swift */, A10000000000000000000007 /* NativePlayerView.swift */, A10000000000000000000004 /* VimeoPlayer.entitlements */); path = VimeoPlayer; sourceTree = "<group>"; };
+		A10000000000000000000032 /* VimeoPlayer */ = {isa = PBXGroup; children = (A100000000000000000000F3 /* AppIcon.icon */, A100000000000000000000F5 /* Assets.xcassets */, A100000000000000000000E1 /* WatchProgress.swift */, A100000000000000000000D1 /* RAR5Decoder.swift */, A1000000000000000000008C /* RARArchive.swift */, A1000000000000000000008D /* RARStream.swift */, A1000000000000000000008E /* MKVPlayer.swift */, A100000000000000000000C2 /* Config.swift */, A10000000000000000000001 /* VimeoPlayerApp.swift */, A10000000000000000000002 /* ContentView.swift */, A1000000000000000000008B /* TMDB.swift */, A1000000000000000000008A /* StreamProxy.swift */, A10000000000000000000089 /* LocalHTTPServer.swift */, A10000000000000000000088 /* SegmentDownloader.swift */, A10000000000000000000087 /* HLS.swift */, A10000000000000000000086 /* SeasonDownload.swift */, A10000000000000000000085 /* Downloads.swift */, A10000000000000000000084 /* Glass.swift */, A100000000000000000000F0 /* StreamingSidebar.swift */, A10000000000000000000083 /* Playback.swift */, A10000000000000000000082 /* HomeView.swift */, A10000000000000000000081 /* Catalog.swift */, A10000000000000000000003 /* VideoWebView.swift */, A10000000000000000000006 /* NativePlayerModel.swift */, A10000000000000000000007 /* NativePlayerView.swift */, A10000000000000000000004 /* VimeoPlayer.entitlements */); path = VimeoPlayer; sourceTree = "<group>"; };
 		A10000000000000000000033 /* Products */ = {isa = PBXGroup; children = (A10000000000000000000005 /* LaMovie.app */); name = Products; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
@@ -81,7 +83,7 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		A10000000000000000000022 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A100000000000000000000F4 /* AppIcon.icon in Resources */, ); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000022 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A100000000000000000000F4 /* AppIcon.icon in Resources */, A100000000000000000000F6 /* Assets.xcassets in Resources */, ); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */

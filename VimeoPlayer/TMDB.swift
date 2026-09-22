@@ -275,7 +275,10 @@ final class TMDBService {
             logo: best(decoded.logos, excludeSVG: true),
             poster: best(decoded.posters, excludeSVG: false),
             backdrop: best(decoded.backdrops, excludeSVG: false, textless: true, size: "w1280"),
-            heroPoster: best(decoded.posters.filter { $0.iso6391 == nil }, excludeSVG: true, size: "original")
+            // "original" pesaba varios MB por imagen y era el mayor causante de
+            // la demora al cargar el hero; w1280 es de sobra para el tamaño que
+            // ocupa en pantalla y coincide con el cap que ya usa el backdrop.
+            heroPoster: best(decoded.posters.filter { $0.iso6391 == nil }, excludeSVG: true, size: "w1280")
         )
     }
 

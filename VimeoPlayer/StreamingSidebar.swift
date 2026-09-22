@@ -20,17 +20,10 @@ struct SidebarConfiguration {
     var titleSize: CGFloat = 16
     var sectionLabelSize: CGFloat = 11
 
-    /// Escala en reposo, sin influencia del cursor.
-    var baseScale: CGFloat = 1.0
-    /// Escala del ítem exactamente bajo el cursor.
-    var maximumScale: CGFloat = 1.16
-    /// Distancia (pt) más allá de la cual el cursor deja de influir en un ítem.
-    var influenceRadius: CGFloat = 116
-    /// Cuánto se desplazan los vecinos para dejarle espacio al ítem magnificado
-    /// (0 = nada, 1 = su propio alto).
-    var pushFactor: CGFloat = 0.3
-    var springResponse: Double = 0.22
-    var springDamping: Double = 0.82
+    /// Cuánto se desplaza a la derecha un ítem cuando el cursor pasa por encima.
+    var hoverShiftX: CGFloat = 10
+    var hoverSpringResponse: Double = 0.28
+    var hoverSpringDamping: Double = 0.75
 
     var dimmedOpacity: Double = 0.5
     var emphasizedOpacity: Double = 0.85
@@ -57,55 +50,10 @@ struct SidebarConfiguration {
     }
 }
 
-/// Matemática pura de la magnificación: sin estado ni SwiftUI, fácil de testear.
-enum SidebarMagnification {
-    /// Curva Hermite (smoothstep): la influencia se mantiene alta cerca del
-    /// cursor y se apaga con una transición suave, en vez de decaer a ritmo
-    /// constante como una recta — de ahí que el efecto se sienta "de onda".
-    private static func smoothstep(_ t: CGFloat) -> CGFloat {
-        let clamped = min(max(t, 0), 1)
-        return clamped * clamped * (3 - 2 * clamped)
-    }
-
-    /// `influence` en [0, 1]: 1 justo bajo el cursor, decae suavemente hasta 0 en `influenceRadius`.
-    static func influence(distance: CGFloat, config: SidebarConfiguration) -> CGFloat {
-        guard config.influenceRadius > 0 else { return 0 }
-        let normalized = min(abs(distance) / config.influenceRadius, 1)
-        return 1 - smoothstep(normalized)
-    }
-
-    static func scale(distance: CGFloat, config: SidebarConfiguration) -> CGFloat {
-        let influence = influence(distance: distance, config: config)
-        return config.baseScale + influence * (config.maximumScale - config.baseScale)
-    }
-
-    /// Desplazamiento vertical de un vecino para "dejar espacio" al ítem bajo
-    /// el cursor: una campana simétrica, 0 en el propio centro del cursor (no
-    /// se mueve a sí mismo) y 0 lejos de él, con el pico a media distancia.
-    static func neighborOffset(distance: CGFloat, direction: CGFloat, rowHeight: CGFloat, config: SidebarConfiguration) -> CGFloat {
-        guard config.influenceRadius > 0 else { return 0 }
-        let normalized = min(abs(distance) / config.influenceRadius, 1)
-        let bump = 4 * normalized * (1 - normalized)
-        return direction * bump * rowHeight * config.pushFactor
-    }
-}
-
-private struct RowFramePreferenceKey: PreferenceKey {
-    static var defaultValue: [String: CGRect] = [:]
-    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
-        value.merge(nextValue()) { _, new in new }
-    }
-}
-
-private let sidebarCoordinateSpace = "streamingSidebar"
-
 /// Navegación vertical completamente personalizada — sin `NavigationSplitView`,
 /// sin `List`, sin estilos del sistema. Flota como una capa translúcida sobre
-/// el contenido (estilo overlay cinematográfico de streaming) e implementa un
-/// "vertical magnification carousel": la posición Y del cursor controla de
-/// forma continua la escala de cada fila, con los vecinos desplazándose
-/// levemente para dejarle espacio. No depende de AppKit: el tracking usa
-/// `onContinuousHover`, la API nativa de SwiftUI para posición continua de puntero.
+/// el contenido (estilo overlay cinematográfico de streaming). Cada fila
+/// reacciona a su propio hover desplazándose levemente hacia la derecha.
 struct StreamingSidebar<Footer: View>: View {
     let appName: String
     var sectionLabel: String? = nil
@@ -118,8 +66,6 @@ struct StreamingSidebar<Footer: View>: View {
     var onClose: (() -> Void)? = nil
     @ViewBuilder var footer: () -> Footer
 
-    @State private var mouseY: CGFloat?
-    @State private var rowFrames: [String: CGRect] = [:]
     @FocusState private var focusedID: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -171,61 +117,37 @@ struct StreamingSidebar<Footer: View>: View {
                 SidebarChromeButton(style: .close, size: config.closeButtonSize, action: onClose)
             }
 
-            Text(appName)
-                .font(.system(size: 20, weight: .bold, design: .rounded))
-                .foregroundStyle(.white)
+            Image("AppLogo")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 48, height: 48)
+                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .accessibilityLabel(appName)
         }
         .padding(.horizontal, config.horizontalInset)
         .padding(.top, config.topInset)
         .padding(.bottom, 30)
     }
 
-    /// Solo esta zona participa del tracking de cursor y la magnificación —
-    /// el título y el footer permanecen siempre a tamaño fijo.
     private var navigationZone: some View {
         VStack(alignment: .leading, spacing: config.itemSpacing) {
             ForEach(items) { item in
                 StreamingSidebarRow(
                     item: item,
                     isSelected: item.id == selectedID,
-                    scale: scale(for: item),
-                    offsetY: offsetY(for: item),
                     isFocused: focusedID == item.id,
                     config: config,
+                    reduceMotion: reduceMotion,
                     action: { onSelect(item) }
                 )
                 .focused($focusedID, equals: item.id)
-                // El ítem magnificado se dibuja por encima de sus vecinos
-                // para que crecer no produzca clipping entre filas.
-                .zIndex(scale(for: item))
             }
         }
         .padding(.horizontal, config.horizontalInset)
-        .coordinateSpace(name: sidebarCoordinateSpace)
-        .onPreferenceChange(RowFramePreferenceKey.self) { rowFrames = $0 }
-        .onContinuousHover(coordinateSpace: .named(sidebarCoordinateSpace)) { phase in
-            switch phase {
-            case .active(let location): mouseY = location.y
-            case .ended: mouseY = nil
-            }
-        }
-        .animation(reduceMotion ? nil : .spring(response: config.springResponse, dampingFraction: config.springDamping), value: mouseY)
         .onKeyPress(.upArrow) { moveFocus(by: -1); return .handled }
         .onKeyPress(.downArrow) { moveFocus(by: 1); return .handled }
         .onKeyPress(.return) { activateFocused(); return .handled }
         .onKeyPress(.space) { activateFocused(); return .handled }
-    }
-
-    private func scale(for item: SidebarItemModel) -> CGFloat {
-        guard !reduceMotion, let mouseY, let frame = rowFrames[item.id] else { return config.baseScale }
-        return SidebarMagnification.scale(distance: frame.midY - mouseY, config: config)
-    }
-
-    private func offsetY(for item: SidebarItemModel) -> CGFloat {
-        guard !reduceMotion, let mouseY, let frame = rowFrames[item.id] else { return 0 }
-        let distance = frame.midY - mouseY
-        let direction: CGFloat = distance < 0 ? -1 : (distance > 0 ? 1 : 0)
-        return SidebarMagnification.neighborOffset(distance: distance, direction: direction, rowHeight: frame.height, config: config)
     }
 
     private func moveFocus(by delta: Int) {
@@ -309,24 +231,25 @@ extension StreamingSidebar where Footer == EmptyView {
 
 /// Una fila: icono + título en un `HStack` propio, sin componentes de lista
 /// del sistema. La selección se comunica solo con tipografía/contraste (nunca
-/// una píldora de fondo); el tamaño lo controla exclusivamente el cursor.
+/// una píldora de fondo); al pasar el cursor por encima, la fila se desplaza
+/// levemente hacia la derecha.
 private struct StreamingSidebarRow: View {
     let item: SidebarItemModel
     let isSelected: Bool
-    let scale: CGFloat
-    let offsetY: CGFloat
     let isFocused: Bool
     let config: SidebarConfiguration
+    let reduceMotion: Bool
     let action: () -> Void
 
-    private var isMagnified: Bool { scale > 1.02 }
+    @State private var hovering = false
+
     private var weight: Font.Weight {
         if isSelected { return .bold }
-        return isMagnified ? .semibold : .medium
+        return hovering ? .semibold : .medium
     }
     private var opacity: Double {
         if isSelected { return config.selectedOpacity }
-        if isMagnified || isFocused { return config.emphasizedOpacity }
+        if hovering || isFocused { return config.emphasizedOpacity }
         return config.dimmedOpacity
     }
 
@@ -344,17 +267,6 @@ private struct StreamingSidebarRow: View {
         .buttonStyle(.plain)
         .disabled(!item.isEnabled)
         .opacity(item.isEnabled ? 1 : 0.35)
-        // El frame se mide AQUÍ, antes de escalar/desplazar, para que el
-        // cálculo de distancia use siempre la posición de reposo de la fila
-        // y no realimente el resultado con su propia transformación visual.
-        .background(
-            GeometryReader { geo in
-                Color.clear.preference(
-                    key: RowFramePreferenceKey.self,
-                    value: [item.id: geo.frame(in: .named(sidebarCoordinateSpace))]
-                )
-            }
-        )
         .overlay(alignment: .leading) {
             if isFocused {
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
@@ -363,8 +275,9 @@ private struct StreamingSidebarRow: View {
                     .padding(.vertical, -2)
             }
         }
-        .scaleEffect(scale, anchor: .leading)
-        .offset(y: offsetY)
+        .offset(x: !reduceMotion && hovering ? config.hoverShiftX : 0)
+        .animation(reduceMotion ? nil : .spring(response: config.hoverSpringResponse, dampingFraction: config.hoverSpringDamping), value: hovering)
+        .onHover { hovering = $0 }
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .accessibilityLabel(item.title)
     }

@@ -536,23 +536,38 @@ struct HomeView: View {
     @StateObject private var animesModel = CategoryViewModel(kind: .animes)
 
     var body: some View {
-        ZStack {
-            #if os(iOS)
-            // De momento sin sidebar en iOS (irá un diseño propio); solo el contenido.
+        // La sidebar es un drawer propio: no usa NavigationSplitView porque ese
+        // componente aplica su material nativo y elimina el degradado de la app.
+        ZStack(alignment: .topLeading) {
             detailContent
-            #else
-            NavigationSplitView {
+
+            if isSidebarAvailable {
+                // El drawer permanece montado y se desplaza fuera de la ventana.
+                // Así el cierre no depende de que SwiftUI conserve una vista durante
+                // una transición de eliminación: recorre exactamente el camino inverso
+                // a la apertura en todos los casos (botón, Escape, toque o categoría).
+                Color.black
+                    .opacity(isSidebarOpen ? sidebarConfig.scrimOpacity : 0)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .allowsHitTesting(isSidebarOpen)
+                    .onTapGesture { closeSidebar() }
+
                 sidebar
-            } detail: {
-                detailContent
+                    .offset(x: isSidebarOpen ? 0 : -sidebarHiddenOffset)
+                    .opacity(isSidebarOpen ? 1 : 0)
+                    .allowsHitTesting(isSidebarOpen)
+                    .accessibilityHidden(!isSidebarOpen)
+
+                if !isSidebarOpen {
+                    #if os(iOS)
+                    sidebarReopenButton
+                        .transition(.opacity)
+                    #endif
+                }
             }
-            .navigationSplitViewStyle(.balanced)
-            // En pantalla completa la barra de herramientas dejaba una franja gris arriba.
-            .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
-            .scrollEdgeEffectHidden(true, for: .top)
-            #endif
         }
-        .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isSidebarOpen)
+        .animation(sidebarAnimation, value: isSidebarOpen)
         .environmentObject(router)
         .environmentObject(recentlyViewed)
         .preferredColorScheme(.dark)
@@ -578,10 +593,11 @@ struct HomeView: View {
         }
         #if os(macOS)
         .toolbar {
+            // Misma posición que el botón de volver automático de NavigationStack.
             ToolbarItem(id: "openSidebar", placement: .navigation) {
                 if isSidebarAvailable && !isSidebarOpen {
                     Button {
-                        isSidebarOpen = true
+                        openSidebar()
                     } label: {
                         Label("Abrir navegación", systemImage: "sidebar.left")
                     }
@@ -603,6 +619,14 @@ struct HomeView: View {
     }
 
     private var sidebarConfig: SidebarConfiguration { .default }
+
+    private var sidebarAnimation: Animation {
+        .spring(response: 0.32, dampingFraction: 0.86)
+    }
+
+    /// Incluye un margen adicional para sacar también el borde suave del
+    /// degradado local, no solamente los 250 pt de la columna.
+    private var sidebarHiddenOffset: CGFloat { sidebarConfig.width + 80 }
 
     private var detailContent: some View {
         NavigationStack(path: $router.path) {
@@ -655,14 +679,22 @@ struct HomeView: View {
     /// traffic lights.
     private var sidebarReopenButton: some View {
         SidebarChromeButton(style: .menu, size: sidebarConfig.closeButtonSize) {
-            isSidebarOpen = true
+            openSidebar()
         }
         .padding(.leading, sidebarConfig.horizontalInset)
         .padding(.top, sidebarConfig.topInset)
     }
 
     private func closeSidebar() {
-        isSidebarOpen = false
+        withAnimation(sidebarAnimation) {
+            isSidebarOpen = false
+        }
+    }
+
+    private func openSidebar() {
+        withAnimation(sidebarAnimation) {
+            isSidebarOpen = true
+        }
     }
 
     /// Solo la portada de Inicio depende de `HomeViewModel`; el resto de categorías
