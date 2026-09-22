@@ -12,6 +12,7 @@ struct VimeoPlayerApp: App {
         }
         .defaultSize(width: 1280, height: 720)
         .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
 
         // El reproductor va en su propia ventana, sin barra de título, para que la pantalla completa sea total.
         Window("Reproductor", id: PlaybackCoordinator.windowID) {

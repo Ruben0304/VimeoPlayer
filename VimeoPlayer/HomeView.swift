@@ -548,8 +548,10 @@ struct HomeView: View {
                     sidebar
                         .transition(.move(edge: .leading).combined(with: .opacity))
                 } else {
+                    #if os(iOS)
                     sidebarReopenButton
                         .transition(.opacity)
+                    #endif
                 }
             }
         }
@@ -577,6 +579,21 @@ struct HomeView: View {
         .onChange(of: isSidebarAvailable) { _, available in
             if !available { isSidebarOpen = false }
         }
+        #if os(macOS)
+        .toolbar {
+            ToolbarItem(id: "openSidebar", placement: .navigation) {
+                if isSidebarAvailable && !isSidebarOpen {
+                    Button {
+                        isSidebarOpen = true
+                    } label: {
+                        Label("Abrir navegación", systemImage: "sidebar.left")
+                    }
+                    .labelStyle(.iconOnly)
+                    .help("Abrir navegación")
+                }
+            }
+        }
+        #endif
         #if os(iOS)
         .fullScreenCover(item: $coordinator.target) { PlayerCover(target: $0) }
         #endif
@@ -622,9 +639,9 @@ struct HomeView: View {
         .sheet(isPresented: $showingSettings) { SettingsView() }
     }
 
-    /// Botón flotante para reabrir la sidebar cuando está cerrada; misma
-    /// posición/inset que el botón de cerrar dentro de la sidebar, para que
-    /// el ojo no salte al alternar entre ambos estados.
+    /// Botón flotante para reabrir la sidebar en iOS. En macOS el equivalente
+    /// vive en la toolbar nativa de la ventana (ver `body`), junto a los
+    /// traffic lights.
     private var sidebarReopenButton: some View {
         SidebarChromeButton(style: .menu, size: sidebarConfig.closeButtonSize) {
             isSidebarOpen = true
