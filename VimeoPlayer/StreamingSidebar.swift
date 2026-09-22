@@ -14,11 +14,11 @@ struct SidebarItemModel: Identifiable, Equatable {
 struct SidebarConfiguration {
     /// Ancho fijo de la columna de navegación; la ventana puede cambiar de
     /// tamaño sin que esto se deforme.
-    var width: CGFloat = 250
-    var horizontalInset: CGFloat = 30
-    var itemSpacing: CGFloat = 16
-    var titleSize: CGFloat = 16
-    var sectionLabelSize: CGFloat = 11
+    var width: CGFloat = 280
+    var horizontalInset: CGFloat = 34
+    var itemSpacing: CGFloat = 18
+    var titleSize: CGFloat = 18
+    var sectionLabelSize: CGFloat = 12
 
     /// Cuánto se desplaza a la derecha un ítem cuando el cursor pasa por encima.
     var hoverShiftX: CGFloat = 10
@@ -112,17 +112,20 @@ struct StreamingSidebar<Footer: View>: View {
     }
 
     private var header: some View {
-        HStack(spacing: 14) {
-            if let onClose {
-                SidebarChromeButton(style: .close, size: config.closeButtonSize, action: onClose)
-            }
-
+        ZStack(alignment: .leading) {
             Image("AppLogo")
                 .resizable()
                 .scaledToFit()
-                .frame(width: 48, height: 48)
-                .clipShape(RoundedRectangle(cornerRadius: 11, style: .continuous))
+                // El logo apaisado conserva su proporción dentro del ancho
+                // disponible de la cabecera, sin convertirse en un icono cuadrado.
+                .frame(width: 110, height: 74)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
                 .accessibilityLabel(appName)
+                .frame(maxWidth: .infinity, alignment: .center)
+
+            if let onClose {
+                SidebarChromeButton(style: .close, size: config.closeButtonSize, action: onClose)
+            }
         }
         .padding(.horizontal, config.horizontalInset)
         .padding(.top, config.topInset)
@@ -187,6 +190,9 @@ struct SidebarChromeButton: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        #if os(macOS)
+        .pointerStyle(.link)
+        #endif
         .accessibilityLabel(style == .close ? "Cerrar navegación" : "Abrir navegación")
     }
 
@@ -261,7 +267,7 @@ private struct StreamingSidebarRow: View {
                 Spacer(minLength: 0)
             }
             .foregroundStyle(.white.opacity(opacity))
-            .padding(.vertical, 4)
+            .padding(.vertical, 6)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -278,6 +284,9 @@ private struct StreamingSidebarRow: View {
         .offset(x: !reduceMotion && hovering ? config.hoverShiftX : 0)
         .animation(reduceMotion ? nil : .spring(response: config.hoverSpringResponse, dampingFraction: config.hoverSpringDamping), value: hovering)
         .onHover { hovering = $0 }
+        #if os(macOS)
+        .pointerStyle(.link)
+        #endif
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
         .accessibilityLabel(item.title)
     }

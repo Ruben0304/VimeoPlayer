@@ -12,7 +12,9 @@ struct VimeoPlayerApp: App {
         }
         .defaultSize(width: 1280, height: 720)
         .windowStyle(.hiddenTitleBar)
-        .windowToolbarStyle(.unifiedCompact(showsTitle: false))
+        // Mantiene toolbar y titlebar en una sola franja, pero con la altura
+        // estándar de macOS para alinear los controles con los semáforos.
+        .windowToolbarStyle(.unified(showsTitle: false))
 
         // El reproductor va en su propia ventana, sin barra de título, para que la pantalla completa sea total.
         Window("Reproductor", id: PlaybackCoordinator.windowID) {

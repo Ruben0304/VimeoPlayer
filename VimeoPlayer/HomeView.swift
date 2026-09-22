@@ -526,8 +526,9 @@ struct HomeView: View {
     @ObservedObject private var translator = QueryTranslator.shared
     @State private var query = ""
     @State private var selection: SidebarCategory? = .home
+    @State private var categoryHistory: [SidebarCategory] = []
     @State private var showingSettings = false
-    @State private var isSidebarOpen = true
+    @State private var isSidebarOpen = false
     @StateObject private var router = NavigationRouter()
 
     @StateObject private var model = HomeViewModel()
@@ -591,22 +592,6 @@ struct HomeView: View {
         .onChange(of: isSidebarAvailable) { _, available in
             if !available { isSidebarOpen = false }
         }
-        #if os(macOS)
-        .toolbar {
-            // Misma posición que el botón de volver automático de NavigationStack.
-            ToolbarItem(id: "openSidebar", placement: .navigation) {
-                if isSidebarAvailable && !isSidebarOpen {
-                    Button {
-                        openSidebar()
-                    } label: {
-                        Label("Abrir navegación", systemImage: "sidebar.left")
-                    }
-                    .labelStyle(.iconOnly)
-                    .help("Abrir navegación")
-                }
-            }
-        }
-        #endif
         #if os(iOS)
         .fullScreenCover(item: $coordinator.target) { PlayerCover(target: $0) }
         #endif
@@ -640,6 +625,44 @@ struct HomeView: View {
             .hidingNavigationBar()
             .ignoresSafeArea(edges: .top)
         }
+        #if os(macOS)
+        .toolbar {
+            ToolbarItem(id: "backCategory") {
+                if isSidebarAvailable && !isSidebarOpen && activeCategory != .home {
+                    Button("Atrás", systemImage: "chevron.backward") {
+                        goBackCategory()
+                    }
+                    .labelStyle(.iconOnly)
+                    .pointerStyle(.link)
+                    .keyboardShortcut(.leftArrow, modifiers: .command)
+                    .help("Volver a la sección anterior")
+                }
+            }
+
+            ToolbarItem(id: "openSidebar") {
+                if isSidebarAvailable && !isSidebarOpen {
+                    Button("Abrir navegación", systemImage: "sidebar.left") {
+                        openSidebar()
+                    }
+                    .labelStyle(.iconOnly)
+                    .pointerStyle(.link)
+                    .help("Abrir navegación")
+                }
+            }
+
+            ToolbarSpacer(.flexible)
+
+            ToolbarItem(id: "search") {
+                Button("Buscar", systemImage: "magnifyingglass") {
+                    navigate(to: .search)
+                }
+                .labelStyle(.iconOnly)
+                .pointerStyle(.link)
+                .keyboardShortcut("f", modifiers: .command)
+                .help("Buscar")
+            }
+        }
+        #endif
     }
 
     /// Sidebar de categorías: material vibrante nativo, como los de macOS, con el
@@ -655,8 +678,7 @@ struct HomeView: View {
             config: sidebarConfig,
             onSelect: { item in
                 guard let category = SidebarCategory(rawValue: item.id) else { return }
-                selection = category
-                closeSidebar()
+                navigate(to: category)
             },
             onClose: { closeSidebar() }
         ) {
@@ -697,6 +719,20 @@ struct HomeView: View {
         }
     }
 
+    private func navigate(to category: SidebarCategory) {
+        guard category != activeCategory else {
+            closeSidebar()
+            return
+        }
+        categoryHistory.append(activeCategory)
+        selection = category
+        closeSidebar()
+    }
+
+    private func goBackCategory() {
+        selection = categoryHistory.popLast() ?? .home
+    }
+
     /// Solo la portada de Inicio depende de `HomeViewModel`; el resto de categorías
     /// muestran su propio catálogo completo paginado vía `CategoryViewModel`.
     private var catalog: some View {
@@ -732,7 +768,7 @@ struct HomeView: View {
                     suggestions: search.suggestions,
                     fallbackName: search.fallbackName,
                     recentlyViewed: recentlyViewed,
-                    onSelectCategory: { selection = $0 }
+                    onSelectCategory: { navigate(to: $0) }
                 )
             } else if let categoryModel = categoryModel(for: activeCategory) {
                 CategoryGridView(model: categoryModel)
