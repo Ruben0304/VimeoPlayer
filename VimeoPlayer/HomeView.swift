@@ -26,11 +26,10 @@ final class HomeViewModel: ObservableObject {
 
         async let movies = fetch("movies", "Películas recién añadidas", .movies)
         async let series = fetch("series", "Series recién añadidas", .tvshows)
-        async let updated = fetch("series-updated", "Series actualizadas", .tvshows, orderBy: "post_modified")
         async let animes = fetch("animes", "Animes recién añadidos", .animes)
 
         // Una fila que falla no debe tumbar el resto de la pantalla.
-        let loaded = await [movies, series, updated, animes].compactMap { $0 }
+        let loaded = await [movies, series, animes].compactMap { $0 }
         if loaded.isEmpty {
             if shelves.isEmpty { state = .failed }
         } else {
@@ -109,42 +108,63 @@ final class SearchViewModel: ObservableObject {
         if query.count < 3 { state = .tooShort; suggestions = []; fallbackName = nil; return }
 
         state = .loading
+        suggestions = []
+        fallbackName = nil
         try? await Task.sleep(for: .milliseconds(400))
         if Task.isCancelled { return }
 
-        // La búsqueda se hace con lo escrito y con su traducción al inglés, y se combinan.
-        // TMDB va en paralelo: no debe retrasar ni romper la búsqueda del catálogo.
-        let translated = await QueryTranslator.shared.english(query)
+        // TMDB (traducción y sugerencias) va en paralelo y nunca retrasa los resultados:
+        // lo escrito se busca de inmediato y lo demás se suma cuando llega.
+        async let extras = Self.extras(for: query)
+        let raw = await Result { try await LaMovieAPI.search(query) }
         if Task.isCancelled { return }
-        let queries = [query] + [translated].compactMap { $0 }
 
-        async let tmdb = Self.suggestions(for: queries)
-        do {
-            var items = try await Self.catalogSearch(queries)
-            let found = await tmdb
+        if case .success(let hits) = raw, !hits.isEmpty {
+            state = .results(hits)
+            let (translated, found) = await extras
             if Task.isCancelled { return }
             suggestions = found
-            fallbackName = nil
-
-            // Sin resultados: se prueban los otros nombres del título en el catálogo.
-            if items.isEmpty {
-                var tried = Set(queries.map { $0.lowercased() })
-                for name in found.flatMap(\.allNames) where name.count >= 3 && tried.insert(name.lowercased()).inserted {
-                    if let hits = try? await LaMovieAPI.search(name), !hits.isEmpty {
-                        items = hits
-                        fallbackName = name
-                        break
-                    }
-                    if Task.isCancelled { return }
-                }
+            if let translated, translated.lowercased() != query.lowercased(),
+               let more = try? await LaMovieAPI.search(translated), !Task.isCancelled {
+                var seen = Set(hits.map(\.id))
+                let added = more.filter { seen.insert($0.id).inserted }
+                if !added.isEmpty { state = .results(hits + added) }
             }
-            if Task.isCancelled { return }
-            state = items.isEmpty ? .empty : .results(items)
-        } catch {
-            if Task.isCancelled { return }
-            suggestions = await tmdb
-            state = .failed
+            return
         }
+
+        // Sin resultados con lo escrito: se prueba la traducción y, si hace falta, los otros nombres.
+        let (translated, found) = await extras
+        if Task.isCancelled { return }
+        suggestions = found
+        var items: [CatalogItem] = []
+        var failed = false
+        if case .failure = raw { failed = true }
+        if let translated, translated.lowercased() != query.lowercased() {
+            if let hits = try? await LaMovieAPI.search(translated) { items = hits; failed = false }
+            if Task.isCancelled { return }
+        }
+        if items.isEmpty {
+            var tried = Set([query, translated].compactMap { $0?.lowercased() })
+            for name in found.flatMap(\.allNames) where name.count >= 3 && tried.insert(name.lowercased()).inserted {
+                if let hits = try? await LaMovieAPI.search(name), !hits.isEmpty {
+                    items = hits
+                    fallbackName = name
+                    failed = false
+                    break
+                }
+                if Task.isCancelled { return }
+            }
+        }
+        if Task.isCancelled { return }
+        state = !items.isEmpty ? .results(items) : (failed ? .failed : .empty)
+    }
+
+    /// Traducción al inglés de lo escrito y sugerencias de TMDB para ambas variantes.
+    private static func extras(for query: String) async -> (String?, [TitleSuggestion]) {
+        let translated = await QueryTranslator.shared.english(query)
+        let queries = [query] + [translated].compactMap { $0 }
+        return (translated, await suggestions(for: queries))
     }
 
     /// Resultados del catálogo para todas las variantes, sin repetir y con la escrita primero.
@@ -516,44 +536,21 @@ struct HomeView: View {
     @StateObject private var animesModel = CategoryViewModel(kind: .animes)
 
     var body: some View {
-        // Sin NavigationSplitView: la sidebar es una capa custom que flota
-        // sobre el contenido a pantalla completa, como en una app de streaming.
-        ZStack(alignment: .topLeading) {
-            NavigationStack(path: $router.path) {
-                ZStack(alignment: .topTrailing) {
-                    AppBackground()
-
-                    catalog
-                }
-                .navigationDestination(for: CatalogItem.self) { DetailView(item: $0) }
-                .navigationDestination(for: PlaybackTarget.self) { PlayerLoaderView(target: $0) }
-                .hidingNavigationBar()
-                .ignoresSafeArea(edges: .top)
+        ZStack {
+            #if os(iOS)
+            // De momento sin sidebar en iOS (irá un diseño propio); solo el contenido.
+            detailContent
+            #else
+            NavigationSplitView {
+                sidebar
+            } detail: {
+                detailContent
             }
-
-            // La sidebar solo tiene sentido en las pantallas de exploración
-            // (Inicio/Buscar/categorías): en el detalle a pantalla completa y
-            // en el reproductor ya hay su propio control de cierre en la misma
-            // esquina, así que la ocultamos por completo para no chocar con él.
-            if isSidebarAvailable {
-                // La sidebar es un overlay tipo drawer: flota sobre la vista que
-                // esté abierta con un scrim oscuro detrás, no reserva espacio fijo.
-                if isSidebarOpen {
-                    Color.black.opacity(0.55)
-                        .ignoresSafeArea()
-                        .contentShape(Rectangle())
-                        .onTapGesture { closeSidebar() }
-                        .transition(.opacity)
-
-                    sidebar
-                        .transition(.move(edge: .leading).combined(with: .opacity))
-                } else {
-                    #if os(iOS)
-                    sidebarReopenButton
-                        .transition(.opacity)
-                    #endif
-                }
-            }
+            .navigationSplitViewStyle(.balanced)
+            // En pantalla completa la barra de herramientas dejaba una franja gris arriba.
+            .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+            .scrollEdgeEffectHidden(true, for: .top)
+            #endif
         }
         .animation(.spring(response: 0.32, dampingFraction: 0.86), value: isSidebarOpen)
         .environmentObject(router)
@@ -607,8 +604,22 @@ struct HomeView: View {
 
     private var sidebarConfig: SidebarConfiguration { .default }
 
-    /// Navegación custom que flota sobre el contenido (sin `NavigationSplitView`
-    /// ni `List`), con magnificación tipo "vertical carousel" controlada por el cursor.
+    private var detailContent: some View {
+        NavigationStack(path: $router.path) {
+            ZStack(alignment: .topTrailing) {
+                AppBackground()
+
+                catalog
+            }
+            .navigationDestination(for: CatalogItem.self) { DetailView(item: $0) }
+            .navigationDestination(for: PlaybackTarget.self) { PlayerLoaderView(target: $0) }
+            .hidingNavigationBar()
+            .ignoresSafeArea(edges: .top)
+        }
+    }
+
+    /// Sidebar de categorías: material vibrante nativo, como los de macOS, con el
+    /// buscador integrado arriba en vez de flotando sobre el contenido.
     private var sidebar: some View {
         StreamingSidebar(
             appName: "LaMovie",
@@ -675,6 +686,7 @@ struct HomeView: View {
                             .foregroundStyle(.white)
                         Button("Reintentar") { Task { await model.load() } }
                             .buttonStyle(.glass)
+                            .pointerCursor()
                             .tint(.white)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -724,9 +736,13 @@ struct HomeView: View {
             .padding(.top, model.featuredItems.isEmpty ? 24 : 0)
             .padding(.bottom, 56)
         }
+        .coordinateSpace(name: HeroScroll.space)
         .refreshable { await model.load() }
     }
 }
+
+/// Espacio de coordenadas del scroll del inicio, para el parallax del hero.
+private enum HeroScroll { static let space = "homeScroll" }
 
 /// Grid con scroll infinito para el catálogo completo de una categoría.
 private struct CategoryGridView: View {
@@ -761,6 +777,7 @@ private struct CategoryGridView: View {
                         .foregroundStyle(.white)
                     Button("Reintentar") { Task { await model.reload() } }
                         .buttonStyle(.glass)
+                        .pointerCursor()
                         .tint(.white)
                 }
             }
@@ -915,6 +932,20 @@ private struct SearchLandingView: View {
     }
 }
 
+extension View {
+    /// Cursor de manita al pasar el mouse por encima (macOS / iPad con puntero).
+    @ViewBuilder
+    func pointerCursor() -> some View {
+        #if os(macOS)
+        onHover { inside in
+            if inside { NSCursor.pointingHand.push() } else { NSCursor.pop() }
+        }
+        #else
+        self
+        #endif
+    }
+}
+
 /// Tarjeta de gradiente vivo, como las categorías de la pestaña Buscar de Apple TV.
 private struct CategoryTile: View {
     let category: SidebarCategory
@@ -953,6 +984,7 @@ private struct CategoryTile: View {
         .buttonStyle(.plain)
         .animation(.spring(response: 0.28, dampingFraction: 0.75), value: hovering)
         .onHover { hovering = $0 }
+        .pointerCursor()
     }
 }
 
@@ -1183,6 +1215,7 @@ private struct SearchablePicker: View {
         }
         .buttonStyle(.plain)
         .glassEffect(.regular.interactive(), in: Capsule())
+        .pointerCursor()
         .popover(isPresented: $isOpen, arrowEdge: .bottom) {
             VStack(spacing: 10) {
                 HStack(spacing: 8) {
@@ -1252,9 +1285,11 @@ private struct ProviderTile: View {
     let isSelected: Bool
     let action: () -> Void
     @State private var hovering = false
+    @State private var brand: Color?
 
     private let size: CGFloat = 120
     private var active: Bool { hovering || isSelected }
+    private var accent: Color { brand ?? .white }
 
     var body: some View {
         Button(action: action) {
@@ -1267,10 +1302,10 @@ private struct ProviderTile: View {
                 .frame(width: size, height: size)
                 .clipShape(Circle())
                 .overlay(
-                    Circle().strokeBorder(active ? Color.white.opacity(0.9) : .white.opacity(0.08),
+                    Circle().strokeBorder(active ? accent.opacity(0.95) : .white.opacity(0.08),
                                           lineWidth: active ? 2 : 1)
                 )
-                .shadow(color: active ? .white.opacity(0.3) : .black.opacity(0.5),
+                .shadow(color: active ? accent.opacity(0.45) : .black.opacity(0.5),
                         radius: active ? 18 : 10, y: active ? 4 : 6)
                 .scaleEffect(hovering ? 1.05 : 1)
 
@@ -1285,6 +1320,62 @@ private struct ProviderTile: View {
         .animation(.spring(response: 0.3, dampingFraction: 0.7), value: hovering)
         .onHover { hovering = $0 }
         .help(provider.name)
+        .task(id: provider.logoURL) { brand = await BrandColor.color(for: provider.logoURL) }
+    }
+}
+
+/// Color de marca de una plataforma, sacado del color más presente y saturado de su logo.
+@MainActor
+private enum BrandColor {
+    private static var cache: [URL: Color] = [:]
+
+    static func color(for url: URL?) async -> Color? {
+        guard let url else { return nil }
+        if let hit = cache[url] { return hit }
+        var loaded = ImageCache.shared.image(for: url)
+        if loaded == nil { loaded = await ImageCache.shared.load(url, category: .platform) }
+        guard let image = loaded, let color = dominant(of: image) else { return nil }
+        cache[url] = color
+        return color
+    }
+
+    private static func dominant(of image: PlatformImage) -> Color? {
+        #if os(macOS)
+        guard let cg = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return nil }
+        #else
+        guard let cg = image.cgImage else { return nil }
+        #endif
+        let side = 24
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
+        let drew = pixels.withUnsafeMutableBytes { buffer -> Bool in
+            guard let context = CGContext(
+                data: buffer.baseAddress, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+                space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return false }
+            context.interpolationQuality = .medium
+            context.draw(cg, in: CGRect(x: 0, y: 0, width: side, height: side))
+            return true
+        }
+        guard drew else { return nil }
+
+        var r = 0.0, g = 0.0, b = 0.0, total = 0.0
+        for i in stride(from: 0, to: pixels.count, by: 4) {
+            let a = Double(pixels[i + 3]) / 255
+            guard a > 0.5 else { continue }
+            let pr = Double(pixels[i]) / 255 / a, pg = Double(pixels[i + 1]) / 255 / a, pb = Double(pixels[i + 2]) / 255 / a
+            let maxC = max(pr, pg, pb), minC = min(pr, pg, pb)
+            let saturation = maxC == 0 ? 0 : (maxC - minC) / maxC
+            // Se ignoran el blanco, el negro y los grises: no son "el color" de la marca.
+            guard saturation > 0.25, maxC > 0.25 else { continue }
+            let weight = saturation * saturation
+            r += pr * weight; g += pg * weight; b += pb * weight; total += weight
+        }
+        guard total > 0 else { return nil }
+        let base = (r / total, g / total, b / total)
+        // Se sube el brillo para que el borde y el resplandor se vean sobre fondo oscuro.
+        let peak = max(base.0, base.1, base.2)
+        let boost = peak > 0 ? min(1 / peak, 1.6) : 1
+        return Color(red: min(base.0 * boost, 1), green: min(base.1 * boost, 1), blue: min(base.2 * boost, 1))
     }
 }
 
@@ -1340,17 +1431,14 @@ private struct SearchResultsView: View {
                     if let fallbackName {
                         FallbackBanner(name: fallbackName)
                     }
-                    if !suggestions.isEmpty {
-                        NameSuggestionsView(
-                            title: "También conocida como",
-                            suggestions: suggestions,
-                            onPick: onPick
-                        )
-                    }
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
                         ForEach(items) { item in
                             PosterCard(item: item)
                         }
+                    }
+                    if !suggestions.isEmpty {
+                        SuggestionsDisclosure(suggestions: suggestions, onPick: onPick)
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
                 }
                 .padding(36)
@@ -1386,6 +1474,43 @@ private struct FallbackBanner: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .glassEffect(.regular, in: Capsule())
+    }
+}
+
+/// Botón opcional bajo los resultados: al abrirlo muestra las sugerencias de TMDB.
+private struct SuggestionsDisclosure: View {
+    let suggestions: [TitleSuggestion]
+    let onPick: (String) -> Void
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Button {
+                withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "sparkle.magnifyingglass")
+                    Text(expanded ? "Ocultar sugerencias" : "¿No es lo que buscabas?")
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.bold))
+                        .rotationEffect(.degrees(expanded ? 180 : 0))
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 10)
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .glassEffect(.regular.interactive(), in: Capsule())
+            .pointerCursor()
+
+            if expanded {
+                NameSuggestionsView(title: "También conocida como", suggestions: suggestions, onPick: onPick)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .animation(.spring(response: 0.4, dampingFraction: 0.85), value: suggestions)
     }
 }
 
@@ -1654,80 +1779,108 @@ private struct HeroView: View {
     @State private var qualityTiers: [QualityTier] = []
     @State private var hasWebDL = false
 
+    #if os(iOS)
+    private let centered = true
+    private let heroHeight: CGFloat = 650
+    #else
+    private let centered = false
+    #endif
+
     var body: some View {
-        ZStack(alignment: .bottomLeading) {
+        ZStack(alignment: centered ? .bottom : .bottomLeading) {
             Group {
+            // Parallax: al subir, la imagen se queda atrás (va a la mitad de velocidad);
+            // al tirar hacia abajo, se estira.
             GeometryReader { proxy in
-                let minY = proxy.frame(in: .global).minY
-                let pulledDown = max(0, minY)
-                let scrolledUp = min(0, minY)
+                let minY = proxy.frame(in: .named(HeroScroll.space)).minY
+                let height = proxy.size.height
+                let pull = max(0, minY)
+                // Sin margen extra: la imagen baja dentro del hero al hacer scroll, y el hueco que
+                // deja arriba queda siempre fuera de la pantalla (el hero ya subió más que eso).
+                let shift = max(0, -minY) * 0.5
                 Color(white: 0.05)
                     .overlay {
                         PosterImage(url: tmdbBackdropURL, category: .backdrop)
                             .aspectRatio(contentMode: .fill)
                     }
-                    .frame(width: proxy.size.width, height: proxy.size.height + pulledDown + abs(scrolledUp) * 0.3)
-                    .offset(y: minY > 0 ? -minY : minY * 0.3)
+                    .frame(width: proxy.size.width, height: height + pull)
+                    .offset(y: shift - pull)
             }
             .clipped()
 
             LinearGradient(
-                colors: [.clear, .clear, Brand.background.opacity(0.5), Brand.background],
+                colors: centered
+                    ? [Brand.background.opacity(0.35), .clear, Brand.background.opacity(0.65), Brand.background]
+                    : [.clear, .clear, Brand.background.opacity(0.5), Brand.background],
                 startPoint: .top, endPoint: .bottom
             )
-            LinearGradient(
-                colors: [Brand.background.opacity(0.75), .clear],
-                startPoint: .leading, endPoint: .trailing
-            )
+            if !centered {
+                LinearGradient(
+                    colors: [Brand.background.opacity(0.75), .clear],
+                    startPoint: .leading, endPoint: .trailing
+                )
+            }
             }
             // Fundido a oscuro: la saliente se apaga primero y la entrante aparece después.
             .opacity(isActive ? 1 : 0)
             .animation(isActive ? .easeInOut(duration: 0.6).delay(0.3) : .easeInOut(duration: 0.4), value: isActive)
 
-            VStack(alignment: .leading, spacing: 14) {
-                TitleLogo(item: item, textFont: .system(size: 42, weight: .bold, design: .rounded), enabled: shouldLoad)
+            VStack(alignment: centered ? .center : .leading, spacing: 14) {
+                TitleLogo(item: item, textFont: .system(size: centered ? 34 : 42, weight: .bold, design: .rounded),
+                          enabled: shouldLoad, alignment: centered ? .center : .leading)
 
-                DetailMetaRow(item: item, tiers: qualityTiers, hasWebDL: hasWebDL)
+                DetailMetaRow(item: item, tiers: qualityTiers, hasWebDL: hasWebDL, fontSize: centered ? 14 : 17)
 
                 if !item.overview.isEmpty {
                     Text(item.overview)
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.7))
-                        .lineLimit(2)
-                        .frame(maxWidth: 520, alignment: .leading)
+                        .lineLimit(centered ? 3 : 2)
+                        .multilineTextAlignment(centered ? .center : .leading)
+                        .frame(maxWidth: 520, alignment: centered ? .center : .leading)
                 }
 
                 HStack(spacing: 14) {
                     PlayButton(target: PlaybackTarget(postId: item.id, title: item.displayTitle, watch: WatchInfo(item: item))) {
                         Label("Reproducir", systemImage: "play.fill")
                             .font(.headline)
-                            .padding(.horizontal, 26)
+                            .padding(.horizontal, centered ? 22 : 26)
                             .padding(.vertical, 12)
-                            .background(.white, in: Capsule())
                             .foregroundStyle(.black)
+                            .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
+                    .glassEffect(.regular.tint(.white).interactive(), in: Capsule())
+                    .pointerCursor()
 
                     NavigationLink(value: item) {
-                        Label("Más información", systemImage: "info.circle")
+                        Label(centered ? "Más info" : "Más información", systemImage: "info.circle")
                             .font(.headline)
-                            .padding(.horizontal, 22)
+                            .padding(.horizontal, centered ? 18 : 22)
                             .padding(.vertical, 12)
                             .foregroundStyle(.white)
                             .contentShape(Capsule())
                     }
                     .buttonStyle(.plain)
                     .glassEffect(.regular.interactive(), in: Capsule())
+                    .pointerCursor()
                 }
                 .padding(.top, 4)
             }
-            .padding(EdgeInsets(top: 20, leading: 36, bottom: 40, trailing: 36))
+            .padding(EdgeInsets(top: 20, leading: centered ? 20 : 36, bottom: centered ? 48 : 40, trailing: centered ? 20 : 36))
+            .frame(maxWidth: .infinity, alignment: centered ? .center : .leading)
             // El texto entra un poco después que la imagen, subiendo suavemente.
             .opacity(isActive ? 1 : 0)
             .offset(y: isActive ? 0 : 14)
             .animation(isActive ? .easeOut(duration: 0.6).delay(0.5) : .easeIn(duration: 0.3), value: isActive)
         }
-        .frame(height: 620)
+        #if os(macOS)
+        // Misma relación de aspecto que los fondos de TMDB (16:9): la imagen se ve completa.
+        .frame(maxWidth: .infinity)
+        .aspectRatio(16.0 / 9.0, contentMode: .fit)
+        #else
+        .frame(height: heroHeight)
+        #endif
         .task(id: shouldLoad) {
             guard shouldLoad, tmdbBackdropURL == nil else { return }
             async let images = TMDBService.shared.images(for: item)
@@ -1735,7 +1888,12 @@ private struct HeroView: View {
             let (resolvedImages, resolvedDownloads) = await (images, downloads)
             qualityTiers = resolvedDownloads.qualityTiers
             hasWebDL = resolvedDownloads.contains(where: \.isWebDL)
+            #if os(iOS)
+            // En móvil el hero es vertical: se usa la portada sin texto (el logo va aparte encima).
+            tmdbBackdropURL = resolvedImages.heroPoster ?? resolvedImages.backdrop
+            #else
             tmdbBackdropURL = resolvedImages.backdrop
+            #endif
         }
     }
 }
@@ -1781,6 +1939,7 @@ private struct PosterCard: View {
             cardBody
         }
         .buttonStyle(.plain)
+        .pointerCursor()
         .task(id: item.id) { tmdbPosterURL = await TMDBService.shared.images(for: item).poster }
     }
 
@@ -1814,6 +1973,40 @@ private struct PosterCard: View {
     }
 }
 
+/// Sinopsis de la ficha: encabezado, texto grande con buen interlineado y ancho de lectura cómodo.
+private struct SynopsisSection: View {
+    let text: String
+
+    private var paragraphs: [String] {
+        text.components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Sinopsis")
+                .font(.system(.title3, design: .rounded).weight(.bold))
+                .foregroundStyle(.white)
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in
+                    Text(paragraph)
+                        .font(.system(size: 17, weight: .regular, design: .default))
+                        .lineSpacing(6)
+                        .foregroundStyle(.white.opacity(0.88))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: 780, alignment: .leading)
+            .textSelection(.enabled)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.08), lineWidth: 1))
+    }
+}
+
 private struct MetaRow: View {
     let item: CatalogItem
 
@@ -1835,6 +2028,7 @@ private struct DetailMetaRow: View {
     let item: CatalogItem
     let tiers: [QualityTier]
     let hasWebDL: Bool
+    var fontSize: CGFloat = 17
 
     var body: some View {
         HStack(spacing: 10) {
@@ -1859,7 +2053,7 @@ private struct DetailMetaRow: View {
             if let top = tiers.first { QualityBadge(label: top.label, filled: true) }
             if hasWebDL { QualityBadge(label: "WEB-DL") }
         }
-        .font(.system(size: 17, weight: .medium, design: .rounded))
+        .font(.system(size: fontSize, weight: .medium, design: .rounded))
     }
 }
 
@@ -1923,6 +2117,7 @@ struct DetailView: View {
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: Circle())
+                .pointerCursor()
                 .padding(24)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
@@ -2002,10 +2197,12 @@ struct DetailView: View {
                                         .font(.headline)
                                         .padding(.horizontal, 28)
                                         .padding(.vertical, 14)
-                                        .background(.white, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                                         .foregroundStyle(.black)
+                                        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                                 }
                                 .buttonStyle(.plain)
+                                .glassEffect(.regular.tint(.white).interactive(), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .pointerCursor()
 
                                 Button {
                                     downloadTarget = PlaybackTarget(postId: item.id, title: item.displayTitle)
@@ -2019,6 +2216,7 @@ struct DetailView: View {
                                 }
                                 .buttonStyle(.plain)
                                 .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .pointerCursor()
                         }
 
                         if let trailer = tmdbDetails?.trailer {
@@ -2034,6 +2232,7 @@ struct DetailView: View {
                             }
                             .buttonStyle(.plain)
                             .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .pointerCursor()
                         }
                     }
 
@@ -2059,9 +2258,7 @@ struct DetailView: View {
 
             VStack(alignment: .leading, spacing: 18) {
                 if !overviewText.isEmpty {
-                    Text(overviewText)
-                        .font(.body)
-                        .foregroundStyle(.white.opacity(0.85))
+                    SynopsisSection(text: overviewText)
                 }
 
                 if let details = tmdbDetails {
@@ -2202,6 +2399,7 @@ struct DetailView: View {
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: Capsule())
+                .pointerCursor()
             }
             if seasons.count > 1 {
                 Picker("Temporada", selection: $season) {
@@ -2238,6 +2436,7 @@ struct DetailView: View {
                 }
                 .buttonStyle(.plain)
                 .glassEffect(.regular.interactive(), in: Circle())
+                .pointerCursor()
                 .help("Descargar")
             }
         }

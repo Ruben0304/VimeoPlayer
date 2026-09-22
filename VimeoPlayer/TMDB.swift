@@ -15,6 +15,8 @@ struct TMDBImages: Equatable {
     var logo: URL?
     var poster: URL?
     var backdrop: URL?
+    /// Portada vertical sin texto rotulado (para el hero del móvil); `nil` si no hay ninguna así.
+    var heroPoster: URL?
 }
 
 /// Tráiler de YouTube de un título.
@@ -272,7 +274,8 @@ final class TMDBService {
         return TMDBImages(
             logo: best(decoded.logos, excludeSVG: true),
             poster: best(decoded.posters, excludeSVG: false),
-            backdrop: best(decoded.backdrops, excludeSVG: false, textless: true, size: "w780")
+            backdrop: best(decoded.backdrops, excludeSVG: false, textless: true, size: "w1280"),
+            heroPoster: best(decoded.posters.filter { $0.iso6391 == nil }, excludeSVG: true, size: "original")
         )
     }
 
@@ -554,6 +557,7 @@ struct TitleLogo: View {
     var textFont: Font = .system(size: 40, weight: .bold, design: .rounded)
     /// Permite diferir la petición (p. ej. páginas del hero que aún no toca mostrar).
     var enabled = true
+    var alignment: Alignment = .leading
 
     private enum LogoState: Equatable { case text, logo(URL) }
     @State private var state: LogoState = .text
@@ -578,7 +582,7 @@ struct TitleLogo: View {
                 }
             }
         }
-        .frame(maxWidth: 360, maxHeight: 130, alignment: .leading)
+        .frame(maxWidth: 360, maxHeight: 130, alignment: alignment)
         .shadow(color: .black.opacity(0.5), radius: 8)
         .accessibilityLabel(item.displayTitle)
         .task(id: TaskKey(id: item.id, enabled: enabled)) { await resolve() }
@@ -590,6 +594,7 @@ struct TitleLogo: View {
             .foregroundStyle(.white)
             .lineLimit(2)
             .minimumScaleFactor(0.7)
+            .multilineTextAlignment(alignment == .center ? .center : .leading)
     }
 
     private struct TaskKey: Hashable { let id: Int; let enabled: Bool }

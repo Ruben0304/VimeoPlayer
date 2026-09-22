@@ -4,6 +4,15 @@ import SwiftUI
 extension View {
     @ViewBuilder
     func glass<S: Shape>(in shape: S, tint: Color? = nil, interactive: Bool = false) -> some View {
+        if interactive {
+            glassBase(in: shape, tint: tint, interactive: true).pointerCursor()
+        } else {
+            glassBase(in: shape, tint: tint, interactive: false)
+        }
+    }
+
+    @ViewBuilder
+    private func glassBase<S: Shape>(in shape: S, tint: Color?, interactive: Bool) -> some View {
         if #available(iOS 26, macOS 26, *) {
             glassEffect(glassStyle(tint: tint, interactive: interactive), in: shape)
         } else if let tint {
