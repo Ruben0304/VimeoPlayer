@@ -536,23 +536,16 @@ struct HomeView: View {
 
     var body: some View {
         ZStack {
+            #if os(iOS)
+            // De momento sin sidebar en iOS (irá un diseño propio); solo el contenido.
+            detailContent
+            #else
             NavigationSplitView {
                 sidebar
             } detail: {
-                NavigationStack(path: $router.path) {
-                    ZStack(alignment: .topTrailing) {
-                        AppBackground()
-
-                        catalog
-                    }
-                    .navigationDestination(for: CatalogItem.self) { DetailView(item: $0) }
-                    .navigationDestination(for: PlaybackTarget.self) { PlayerLoaderView(target: $0) }
-                    .hidingNavigationBar()
-                    .ignoresSafeArea(edges: .top)
-                }
+                detailContent
             }
             .navigationSplitViewStyle(.balanced)
-            #if os(macOS)
             // En pantalla completa la barra de herramientas dejaba una franja gris arriba.
             .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
             .scrollEdgeEffectHidden(true, for: .top)
@@ -577,6 +570,20 @@ struct HomeView: View {
         #if os(iOS)
         .fullScreenCover(item: $coordinator.target) { PlayerCover(target: $0) }
         #endif
+    }
+
+    private var detailContent: some View {
+        NavigationStack(path: $router.path) {
+            ZStack(alignment: .topTrailing) {
+                AppBackground()
+
+                catalog
+            }
+            .navigationDestination(for: CatalogItem.self) { DetailView(item: $0) }
+            .navigationDestination(for: PlaybackTarget.self) { PlayerLoaderView(target: $0) }
+            .hidingNavigationBar()
+            .ignoresSafeArea(edges: .top)
+        }
     }
 
     /// Sidebar de categorías: material vibrante nativo, como los de macOS, con el
