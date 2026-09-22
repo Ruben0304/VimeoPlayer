@@ -1,13 +1,24 @@
 import Foundation
 
 enum ContentKind: String {
-    case movies, tvshows, animes
+    case movies, tvshows, animes, novels, wwe
 
     var label: String {
         switch self {
         case .movies: "Película"
         case .tvshows: "Serie"
         case .animes: "Anime"
+        case .novels: "Novela"
+        case .wwe: "WWE"
+        }
+    }
+
+    /// Series, animes y novelas se ven por temporadas y episodios; películas y
+    /// eventos de WWE se reproducen directamente.
+    var isEpisodic: Bool {
+        switch self {
+        case .tvshows, .animes, .novels: true
+        case .movies, .wwe: false
         }
     }
 }
@@ -223,14 +234,23 @@ enum LaMovieAPI {
         return payload
     }
 
-    static func listing(_ kind: ContentKind, orderBy: String = "latest", perPage: Int = 21, page: Int = 1) async throws -> [CatalogItem] {
-        try await get("listing/" + kind.rawValue, [
+    /// `filter` es el JSON que usa la web para acotar por taxonomía, p. ej. `{"genres":[703]}`.
+    static func listing(_ kind: ContentKind, orderBy: String = "latest", perPage: Int = 21, page: Int = 1, filter: String? = nil) async throws -> [CatalogItem] {
+        var query = [
             "page": String(page),
             "orderBy": orderBy,
             "order": "desc",
             "postType": kind.rawValue,
             "postsPerPage": String(perPage),
-        ], as: ListingPayload.self).posts
+        ]
+        if let filter { query["filter"] = filter }
+        return try await get("listing/" + kind.rawValue, query, as: ListingPayload.self).posts
+    }
+
+    /// "Preferidas por los usuarios" de la portada de la web (mezcla de tipos).
+    static func popular() async throws -> [CatalogItem] {
+        try await get("listing/up", [:], as: ListingPayload.self).posts
+            .filter { ContentKind(rawValue: $0.type) != nil }
     }
 
     /// Búsqueda por texto (la API exige entre 3 y 16 caracteres). Sin coincidencias devuelve `[]`.

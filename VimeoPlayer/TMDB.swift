@@ -2,6 +2,56 @@ import SwiftUI
 import NaturalLanguage
 import Translation
 
+/// Resolución preferida para las imágenes de TMDB. La caché conserva siempre
+/// la mejor copia descargada de cada recurso, aunque después se elija un nivel menor.
+enum ArtworkQuality: String, CaseIterable, Identifiable {
+    static let storageKey = "artworkQuality"
+
+    case medium, high, veryHigh
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .medium: "Media"
+        case .high: "Alta"
+        case .veryHigh: "Muy alta"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .medium: "Menor consumo de datos y almacenamiento"
+        case .high: "Buen equilibrio entre nitidez y tamaño"
+        case .veryHigh: "Resolución original de TMDB"
+        }
+    }
+
+    var posterSize: String {
+        switch self { case .medium: "w500"; case .high: "w780"; case .veryHigh: "original" }
+    }
+    var backdropSize: String {
+        switch self { case .medium: "w780"; case .high: "w1280"; case .veryHigh: "original" }
+    }
+    var heroSize: String {
+        switch self { case .medium: "w780"; case .high: "w1280"; case .veryHigh: "original" }
+    }
+    var logoSize: String {
+        switch self { case .medium: "w300"; case .high: "w500"; case .veryHigh: "original" }
+    }
+    var providerSize: String {
+        switch self { case .medium: "w185"; case .high: "w300"; case .veryHigh: "original" }
+    }
+    var profileSize: String {
+        switch self { case .medium: "w185"; case .high: "h632"; case .veryHigh: "original" }
+    }
+
+    static var current: ArtworkQuality {
+        let raw = UserDefaults.standard.string(forKey: storageKey)
+        return raw.flatMap(ArtworkQuality.init(rawValue:)) ?? .high
+    }
+}
+
 /// Reparto (actor + personaje) devuelto por TMDB.
 struct CastMember: Identifiable, Hashable {
     let id: Int
@@ -15,7 +65,8 @@ struct TMDBImages: Equatable {
     var logo: URL?
     var poster: URL?
     var backdrop: URL?
-    /// Portada vertical sin texto rotulado (para el hero del móvil); `nil` si no hay ninguna así.
+    /// Portada vertical sin idioma declarado (para el hero móvil). TMDB no
+    /// garantiza que esté libre de texto, solo que no tiene idioma etiquetado.
     var heroPoster: URL?
 }
 
@@ -175,12 +226,13 @@ final class TMDBService {
     func images(for item: CatalogItem) async -> TMDBImages {
         guard !apiKey.isEmpty else { return TMDBImages() }
 
-        let cacheKey = cacheKey(for: item)
+        let quality = ArtworkQuality.current
+        let cacheKey = cacheKey(for: item) + "|" + quality.rawValue
         if let cached = imagesCache[cacheKey] { return cached }
 
         for title in titlesToTry(for: item) {
             if let id = await searchID(kind: item.kind, title: title, year: item.year),
-               let images = await fetchImages(kind: item.kind, id: id) {
+               let images = await fetchImages(kind: item.kind, id: id, quality: quality) {
                 imagesCache[cacheKey] = images
                 return images
             }
@@ -195,12 +247,13 @@ final class TMDBService {
     func details(for item: CatalogItem) async -> TMDBDetails? {
         guard !apiKey.isEmpty else { return nil }
 
-        let cacheKey = cacheKey(for: item)
+        let quality = ArtworkQuality.current
+        let cacheKey = cacheKey(for: item) + "|" + quality.rawValue
         if let cached = detailsCache[cacheKey] { return cached }
 
         for title in titlesToTry(for: item) {
             if let id = await searchID(kind: item.kind, title: title, year: item.year),
-               let details = await fetchDetails(kind: item.kind, id: id) {
+               let details = await fetchDetails(kind: item.kind, id: id, quality: quality) {
                 detailsCache[cacheKey] = details
                 return details
             }
@@ -214,7 +267,7 @@ final class TMDBService {
     }
 
     private func searchID(kind: ContentKind, title: String, year: String?) async -> Int? {
-        let isMovie = kind == .movies
+        let isMovie = !kind.isEpisodic
         var components = URLComponents(string: "https://api.themoviedb.org/3/search/" + (isMovie ? "movie" : "tv"))!
         var query = [
             URLQueryItem(name: "api_key", value: apiKey),
@@ -232,8 +285,8 @@ final class TMDBService {
         return decoded.results.first?.id
     }
 
-    private func fetchImages(kind: ContentKind, id: Int) async -> TMDBImages? {
-        let isMovie = kind == .movies
+    private func fetchImages(kind: ContentKind, id: Int, quality: ArtworkQuality) async -> TMDBImages? {
+        let isMovie = !kind.isEpisodic
         var components = URLComponents(string: "https://api.themoviedb.org/3/\(isMovie ? "movie" : "tv")/\(id)/images")!
         components.queryItems = [
             URLQueryItem(name: "api_key", value: apiKey),
@@ -254,7 +307,7 @@ final class TMDBService {
             default: 3
             }
         }
-        func best(_ logos: [Logo], excludeSVG: Bool, textless: Bool = false, size: String = "w500") -> URL? {
+        func best(_ logos: [Logo], excludeSVG: Bool, textless: Bool = false, size: String) -> URL? {
             // Fondos: se prefieren los "sin idioma" (sin título rotulado en la imagen), porque
             // el logo se pone aparte encima; solo si no hay ninguno se usa uno con texto.
             let textlessOnly = logos.filter { $0.iso6391 == nil }
@@ -272,18 +325,15 @@ final class TMDBService {
         }
 
         return TMDBImages(
-            logo: best(decoded.logos, excludeSVG: true),
-            poster: best(decoded.posters, excludeSVG: false),
-            backdrop: best(decoded.backdrops, excludeSVG: false, textless: true, size: "w1280"),
-            // "original" pesaba varios MB por imagen y era el mayor causante de
-            // la demora al cargar el hero; w1280 es de sobra para el tamaño que
-            // ocupa en pantalla y coincide con el cap que ya usa el backdrop.
-            heroPoster: best(decoded.posters.filter { $0.iso6391 == nil }, excludeSVG: true, size: "w1280")
+            logo: best(decoded.logos, excludeSVG: true, size: quality.logoSize),
+            poster: best(decoded.posters, excludeSVG: false, size: quality.posterSize),
+            backdrop: best(decoded.backdrops, excludeSVG: false, textless: true, size: quality.backdropSize),
+            heroPoster: best(decoded.posters.filter { $0.iso6391 == nil }, excludeSVG: true, size: quality.heroSize)
         )
     }
 
-    private func fetchDetails(kind: ContentKind, id: Int) async -> TMDBDetails? {
-        let isMovie = kind == .movies
+    private func fetchDetails(kind: ContentKind, id: Int, quality: ArtworkQuality) async -> TMDBDetails? {
+        let isMovie = !kind.isEpisodic
         var components = URLComponents(string: "https://api.themoviedb.org/3/\(isMovie ? "movie" : "tv")/\(id)")!
         components.queryItems = [
             URLQueryItem(name: "api_key", value: apiKey),
@@ -299,7 +349,7 @@ final class TMDBService {
 
         var cast: [CastMember] = []
         for entry in (decoded.credits?.cast ?? []).prefix(12) {
-            let profileURL = entry.profilePath.flatMap { URL(string: "https://image.tmdb.org/t/p/w185" + $0) }
+            let profileURL = entry.profilePath.flatMap { URL(string: "https://image.tmdb.org/t/p/\(quality.profileSize)" + $0) }
             cast.append(CastMember(id: entry.id, name: entry.name, character: entry.character, profileURL: profileURL))
         }
 
@@ -325,7 +375,7 @@ final class TMDBService {
         func providers(_ entries: [ProviderEntry]?) -> [StreamingProvider] {
             (entries ?? []).map {
                 StreamingProvider(id: $0.providerId, name: $0.providerName,
-                                  logoURL: $0.logoPath.flatMap { URL(string: "https://image.tmdb.org/t/p/w300" + $0) })
+                                  logoURL: $0.logoPath.flatMap { URL(string: "https://image.tmdb.org/t/p/\(quality.providerSize)" + $0) })
             }
         }
         var streaming: [String: StreamingAvailability] = [:]
@@ -564,6 +614,7 @@ struct TitleLogo: View {
 
     private enum LogoState: Equatable { case text, logo(URL) }
     @State private var state: LogoState = .text
+    @AppStorage(ArtworkQuality.storageKey) private var artworkQuality = ArtworkQuality.high
 
     var body: some View {
         Group {
@@ -588,7 +639,7 @@ struct TitleLogo: View {
         .frame(maxWidth: 360, maxHeight: 130, alignment: alignment)
         .shadow(color: .black.opacity(0.5), radius: 8)
         .accessibilityLabel(item.displayTitle)
-        .task(id: TaskKey(id: item.id, enabled: enabled)) { await resolve() }
+        .task(id: TaskKey(id: item.id, enabled: enabled, quality: artworkQuality)) { await resolve() }
     }
 
     private var fallbackText: some View {
@@ -600,7 +651,11 @@ struct TitleLogo: View {
             .multilineTextAlignment(alignment == .center ? .center : .leading)
     }
 
-    private struct TaskKey: Hashable { let id: Int; let enabled: Bool }
+    private struct TaskKey: Hashable {
+        let id: Int
+        let enabled: Bool
+        let quality: ArtworkQuality
+    }
 
     /// Solo el logo de TMDB; si no hay, se queda el título en texto.
     private func resolve() async {
@@ -643,6 +698,7 @@ struct QualityBadge: View {
 /// nunca en el repositorio).
 struct SettingsView: View {
     @AppStorage("tmdbKey") private var tmdbKey: String = ""
+    @AppStorage(ArtworkQuality.storageKey) private var artworkQuality = ArtworkQuality.high
     @State private var usage: [ImageCategory: CacheUsage]?
     @State private var selected: Set<ImageCategory> = []
     @State private var age = AgeOption.any
@@ -693,6 +749,21 @@ struct SettingsView: View {
             }
 
             Section {
+                Picker("Calidad", selection: $artworkQuality) {
+                    ForEach(ArtworkQuality.allCases) { quality in
+                        Text(quality.label).tag(quality)
+                    }
+                }
+                Text(artworkQuality.detail)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Calidad de imágenes")
+            } footer: {
+                Text("Una imagen guardada nunca se sustituye por otra de menor calidad. Al subir el nivel, se descargará y conservará la versión superior.")
+            }
+
+            Section {
                 if let usage {
                     LabeledContent("Total") {
                         Text("\(size(totalBytes)) · \(totalCount) imágenes").fontWeight(.semibold)
@@ -732,7 +803,9 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+        #if os(macOS)
         .frame(width: 480, height: 660)
+        #endif
         .task { usage = await ImageCache.shared.usage() }
         .confirmationDialog("¿Borrar las imágenes de \(selected.count) \(selected.count == 1 ? "categoría" : "categorías")?",
                             isPresented: $confirmClear) {

@@ -1,6 +1,9 @@
 import SwiftUI
 import CryptoKit
 import Translation
+#if os(iOS)
+import UIKit
+#endif
 
 struct Shelf: Identifiable {
     let id: String
@@ -24,12 +27,24 @@ final class HomeViewModel: ObservableObject {
     func load() async {
         if shelves.isEmpty { state = .loading }
 
-        async let movies = fetch("movies", "Películas recién añadidas", .movies)
-        async let series = fetch("series", "Series recién añadidas", .tvshows)
-        async let animes = fetch("animes", "Animes recién añadidos", .animes)
+        // Mismas filas y en el mismo orden que la portada de lamovie.org.
+        async let movies = fetch("movies", "Películas recién añadidas") { try await LaMovieAPI.listing(.movies) }
+        async let series = fetch("series", "Series recién añadidas") { try await LaMovieAPI.listing(.tvshows) }
+        async let updated = fetch("seriesUpdated", "Series actualizadas") {
+            try await LaMovieAPI.listing(.tvshows, orderBy: "post_modified")
+        }
+        async let animes = fetch("animes", "Animes recién añadidos") { try await LaMovieAPI.listing(.animes) }
+        async let wwe = fetch("wwe", "WWE") { try await LaMovieAPI.listing(.wwe, orderBy: "ID", perPage: 16) }
+        async let novels = fetch("novels", "La Hora del Drama") {
+            try await LaMovieAPI.listing(.novels, orderBy: "ID", filter: "{}")
+        }
+        async let popular = fetch("popular", "Preferidas por los usuarios") { try await LaMovieAPI.popular() }
+        async let kids = fetch("kids", "Películas infantiles") {
+            try await LaMovieAPI.listing(.movies, orderBy: "ID", perPage: 12, filter: #"{"genres":[703,520,398]}"#)
+        }
 
         // Una fila que falla no debe tumbar el resto de la pantalla.
-        let loaded = await [movies, series, animes].compactMap { $0 }
+        let loaded = await [movies, series, updated, animes, wwe, novels, popular, kids].compactMap { $0 }
         if loaded.isEmpty {
             if shelves.isEmpty { state = .failed }
         } else {
@@ -38,8 +53,8 @@ final class HomeViewModel: ObservableObject {
         }
     }
 
-    private func fetch(_ id: String, _ title: String, _ kind: ContentKind, orderBy: String = "latest") async -> Shelf? {
-        guard let items = try? await LaMovieAPI.listing(kind, orderBy: orderBy), !items.isEmpty else { return nil }
+    private func fetch(_ id: String, _ title: String, _ request: () async throws -> [CatalogItem]) async -> Shelf? {
+        guard let items = try? await request(), !items.isEmpty else { return nil }
         return Shelf(id: id, title: title, items: items)
     }
 }
@@ -198,7 +213,7 @@ final class SearchViewModel: ObservableObject {
             lists = indexed.sorted { $0.0 < $1.0 }.map(\.1)
         }
         var seen = Set<Int>()
-        return Array(lists.flatMap { $0 }.filter { seen.insert($0.id * 10 + ($0.kind == .movies ? 1 : 2)).inserted }.prefix(5))
+        return Array(lists.flatMap { $0 }.filter { seen.insert($0.id * 10 + ($0.kind.isEpisodic ? 2 : 1)).inserted }.prefix(5))
     }
 }
 
@@ -320,7 +335,8 @@ struct CacheUsage: Equatable {
 @MainActor
 final class ImageCache {
     static let shared = ImageCache()
-    private let memory = NSCache<NSURL, PlatformImage>()
+    private let memory = NSCache<NSString, PlatformImage>()
+    private var memoryRanks: [String: Int] = [:]
     private let root: URL = {
         let base = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
         let dir = base.appendingPathComponent("ImageCache", isDirectory: true)
@@ -328,20 +344,73 @@ final class ImageCache {
         return dir
     }()
 
+    private struct CacheIdentity {
+        let key: String
+        let rank: Int
+    }
+
+    /// Las URLs de TMDB solo difieren en el segmento de tamaño (`w500`, `w1280`,
+    /// `original`). Todas las variantes comparten una identidad y el rango evita
+    /// que una descarga de menor resolución desplace a otra mejor.
+    private func identity(for url: URL) -> CacheIdentity {
+        let parts = url.pathComponents
+        if url.host == "image.tmdb.org", let p = parts.firstIndex(of: "p"), parts.indices.contains(p + 2) {
+            let token = parts[p + 1]
+            let rank = token == "original" ? Int.max : Int(token.dropFirst()) ?? 0
+            let assetPath = parts[(p + 2)...].joined(separator: "/")
+            return CacheIdentity(key: "tmdb://\(assetPath)", rank: rank)
+        }
+        return CacheIdentity(key: url.absoluteString, rank: 0)
+    }
+
     /// Solo la memoria: respuesta inmediata para pintar sin parpadeo.
-    func image(for url: URL) -> PlatformImage? { memory.object(forKey: url as NSURL) }
-    func insert(_ image: PlatformImage, for url: URL) { memory.setObject(image, forKey: url as NSURL) }
+    func image(for url: URL) -> PlatformImage? {
+        let identity = identity(for: url)
+        guard (memoryRanks[identity.key] ?? -1) >= identity.rank else { return nil }
+        return memory.object(forKey: identity.key as NSString)
+    }
+
+    private func insert(_ image: PlatformImage, identity: CacheIdentity) {
+        guard (memoryRanks[identity.key] ?? -1) <= identity.rank else { return }
+        memory.setObject(image, forKey: identity.key as NSString)
+        memoryRanks[identity.key] = identity.rank
+    }
 
     private nonisolated static func folder(_ category: ImageCategory, in root: URL) -> URL {
         // `.other` es la propia raíz (donde estaban los archivos antiguos).
         category == .other ? root : root.appendingPathComponent(category.rawValue, isDirectory: true)
     }
 
-    private func file(for url: URL, category: ImageCategory) -> URL {
+    private func file(for identity: CacheIdentity, category: ImageCategory) -> URL {
         let folder = Self.folder(category, in: root)
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let hash = SHA256.hash(data: Data(url.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined()
+        let hash = SHA256.hash(data: Data(identity.key.utf8)).map { String(format: "%02x", $0) }.joined()
         return folder.appendingPathComponent(hash)
+    }
+
+    private func rankFile(for file: URL) -> URL { file.appendingPathExtension("quality") }
+
+    /// Archivos creados por versiones anteriores, cuando cada tamaño de TMDB
+    /// tenía una clave independiente. Permite adoptar también una copia alta ya existente.
+    private func legacyFiles(for url: URL, category: ImageCategory) -> [(file: URL, rank: Int)] {
+        guard url.host == "image.tmdb.org" else { return [] }
+        let path = url.path
+        guard let marker = path.range(of: "/t/p/"),
+              let sizeEnd = path[marker.upperBound...].firstIndex(of: "/") else { return [] }
+        let prefix = String(path[..<marker.upperBound])
+        let suffix = String(path[sizeEnd...])
+        let folder = Self.folder(category, in: root)
+        let tokens = ["w185", "w300", "w500", "h632", "w780", "w1280", "original"]
+
+        return tokens.compactMap { token in
+            var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+            components?.path = prefix + token + suffix
+            guard let candidate = components?.url else { return nil }
+            let hash = SHA256.hash(data: Data(candidate.absoluteString.utf8))
+                .map { String(format: "%02x", $0) }.joined()
+            let rank = token == "original" ? Int.max : Int(token.dropFirst()) ?? 0
+            return (folder.appendingPathComponent(hash), rank)
+        }
     }
 
     /// Imágenes y bytes en disco, por categoría.
@@ -354,6 +423,7 @@ final class ImageCache {
                     at: Self.folder(category, in: root), includingPropertiesForKeys: [.fileSizeKey, .isRegularFileKey])) ?? []
                 var usage = CacheUsage()
                 for file in files {
+                    guard file.pathExtension != "quality" else { continue }
                     let values = try? file.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
                     guard values?.isRegularFile == true else { continue }   // salta las subcarpetas
                     usage.count += 1
@@ -370,6 +440,7 @@ final class ImageCache {
     @discardableResult
     func clear(_ categories: Set<ImageCategory>, olderThan age: TimeInterval?) async -> Int64 {
         memory.removeAllObjects()
+        memoryRanks.removeAll()
         let root = root
         return await Task.detached {
             let keys: [URLResourceKey] = [.fileSizeKey, .contentModificationDateKey, .isRegularFileKey]
@@ -395,23 +466,51 @@ final class ImageCache {
     func load(_ url: URL, category: ImageCategory) async -> PlatformImage? {
         if let cached = image(for: url) { return cached }
 
-        let file = file(for: url, category: category)
-        let stored = await Task.detached { () -> Data? in
-            guard let data = try? Data(contentsOf: file) else { return nil }
+        let identity = identity(for: url)
+        let file = file(for: identity, category: category)
+        let rankFile = rankFile(for: file)
+        let legacyFiles = legacyFiles(for: url, category: category)
+        let stored = await Task.detached { () -> (Data, Int)? in
+            var best: (data: Data, rank: Int)?
+            if let data = try? Data(contentsOf: file) {
+                let rank = (try? String(contentsOf: rankFile, encoding: .utf8)).flatMap(Int.init) ?? 0
+                best = (data, rank)
+            }
+            for legacy in legacyFiles where legacy.rank > (best?.rank ?? -1) {
+                if let data = try? Data(contentsOf: legacy.file) { best = (data, legacy.rank) }
+            }
+            guard let best else { return nil }
+
+            // Migra silenciosamente la mejor copia del formato antiguo a la clave
+            // normalizada, sin eliminar el original hasta que el usuario limpie la caché.
+            if (try? Data(contentsOf: file)) != best.data {
+                try? best.data.write(to: file, options: .atomic)
+            }
+            try? String(best.rank).write(to: rankFile, atomically: true, encoding: .utf8)
             // Se anota el último uso: "borrar lo antiguo" borra lo que lleva tiempo sin verse.
             try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: file.path)
-            return data
+            try? FileManager.default.setAttributes([.modificationDate: Date()], ofItemAtPath: rankFile.path)
+            return best
         }.value
-        if let data = stored, let loaded = PlatformImage(data: data) {
-            insert(loaded, for: url)
-            return loaded
+        var fallback: PlatformImage?
+        if let (data, storedRank) = stored, let loaded = PlatformImage(data: data) {
+            fallback = loaded
+            insert(loaded, identity: CacheIdentity(key: identity.key, rank: storedRank))
+            if storedRank >= identity.rank { return loaded }
         }
 
         guard let (data, response) = try? await URLSession.shared.data(from: url),
               (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
-              let loaded = PlatformImage(data: data) else { return nil }
-        insert(loaded, for: url)
-        Task.detached { try? data.write(to: file, options: .atomic) }
+              let loaded = PlatformImage(data: data) else { return fallback }
+
+        // Una petición inferior que terminó después de otra superior tampoco puede
+        // degradar la copia que ya quedó en memoria.
+        if let better = image(for: url) { return better }
+        insert(loaded, identity: identity)
+        await Task.detached {
+            try? data.write(to: file, options: .atomic)
+            try? String(identity.rank).write(to: rankFile, atomically: true, encoding: .utf8)
+        }.value
         return loaded
     }
 }
@@ -560,12 +659,6 @@ struct HomeView: View {
                     .allowsHitTesting(isSidebarOpen)
                     .accessibilityHidden(!isSidebarOpen)
 
-                if !isSidebarOpen {
-                    #if os(iOS)
-                    sidebarReopenButton
-                        .transition(.opacity)
-                    #endif
-                }
             }
         }
         .animation(sidebarAnimation, value: isSidebarOpen)
@@ -573,7 +666,6 @@ struct HomeView: View {
         .environmentObject(recentlyViewed)
         .preferredColorScheme(.dark)
         .task { await model.load() }
-        .task(id: query) { await search.run(query) }
         // Si falta el idioma de traducción, el sistema pide permiso para descargarlo.
         .translationTask(translator.downloadConfig) { session in
             try? await session.prepareTranslation()
@@ -585,10 +677,8 @@ struct HomeView: View {
             router.path = NavigationPath()
             if selection != .search { query = "" }
         }
-        // Si el usuario entra a un detalle o al reproductor con la sidebar
-        // abierta (p. ej. desde el teclado), la cerramos: al volver a la
-        // pantalla de exploración debe reaparecer en su estado normal, no
-        // "atascada" encima de una vista que ya tiene su propio cierre.
+        // En macOS la sidebar sigue limitada a la raíz. En iOS permanece
+        // disponible también dentro de las fichas, como navegación global.
         .onChange(of: isSidebarAvailable) { _, available in
             if !available { isSidebarOpen = false }
         }
@@ -597,10 +687,14 @@ struct HomeView: View {
         #endif
     }
 
-    /// La sidebar solo aplica en la raíz de exploración: sin nada apilado
-    /// en la navegación (detalle, reproductor).
+    /// En iPhone la navegación lateral está disponible desde cualquier ficha.
+    /// macOS conserva el comportamiento anterior, limitado a la raíz.
     private var isSidebarAvailable: Bool {
+        #if os(iOS)
+        true
+        #else
         router.path.isEmpty
+        #endif
     }
 
     private var sidebarConfig: SidebarConfiguration { .default }
@@ -620,10 +714,33 @@ struct HomeView: View {
 
                 catalog
             }
-            .navigationDestination(for: CatalogItem.self) { DetailView(item: $0) }
+            .navigationDestination(for: CatalogItem.self) {
+                DetailView(item: $0, onOpenSidebar: openSidebar)
+            }
             .navigationDestination(for: PlaybackTarget.self) { PlayerLoaderView(target: $0) }
+            #if os(iOS)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    if router.path.isEmpty && !isSidebarOpen {
+                        Button("Abrir navegación", systemImage: "line.3.horizontal") {
+                            openSidebar()
+                        }
+                        .labelStyle(.iconOnly)
+                    }
+                }
+            }
+            .toolbarVisibility(.visible, for: .navigationBar)
+            .toolbarBackground(.hidden, for: .navigationBar)
+            #else
             .hidingNavigationBar()
+            #endif
+            #if os(iOS)
+            // Solo el hero de Inicio se extiende bajo la barra. Buscar usa una
+            // barra y un campo nativos, así que su contenido empieza debajo.
+            .ignoresSafeArea(edges: activeCategory == .home ? .top : [])
+            #else
             .ignoresSafeArea(edges: .top)
+            #endif
         }
         #if os(macOS)
         .toolbar {
@@ -696,17 +813,6 @@ struct HomeView: View {
         .sheet(isPresented: $showingSettings) { SettingsView() }
     }
 
-    /// Botón flotante para reabrir la sidebar en iOS. En macOS el equivalente
-    /// vive en la toolbar nativa de la ventana (ver `body`), junto a los
-    /// traffic lights.
-    private var sidebarReopenButton: some View {
-        SidebarChromeButton(style: .menu, size: sidebarConfig.closeButtonSize) {
-            openSidebar()
-        }
-        .padding(.leading, sidebarConfig.horizontalInset)
-        .padding(.top, sidebarConfig.topInset)
-    }
-
     private func closeSidebar() {
         withAnimation(sidebarAnimation) {
             isSidebarOpen = false
@@ -721,6 +827,9 @@ struct HomeView: View {
 
     private func navigate(to category: SidebarCategory) {
         guard category != activeCategory else {
+            #if os(iOS)
+            router.path = NavigationPath()
+            #endif
             closeSidebar()
             return
         }
@@ -789,7 +898,7 @@ struct HomeView: View {
 
     private var homeContent: some View {
         ScrollView {
-            LazyVStack(alignment: .leading, spacing: 44) {
+            LazyVStack(alignment: .leading, spacing: HomeLayout.sectionSpacing) {
                 if !model.featuredItems.isEmpty {
                     HeroCarousel(items: model.featuredItems)
                         .ignoresSafeArea(edges: .top)
@@ -818,13 +927,14 @@ private struct CategoryGridView: View {
 
     var body: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: HomeLayout.gridMinimumCardWidth), spacing: HomeLayout.cardSpacing, alignment: .top)], alignment: .leading, spacing: HomeLayout.cardSpacing) {
                 ForEach(model.items) { item in
-                    PosterCard(item: item)
+                    PosterCard(item: item, width: HomeLayout.gridCardWidth)
                         .task { await model.loadMoreIfNeeded(currentItem: item) }
                 }
             }
-            .padding(36)
+            .padding(.horizontal, HomeLayout.shelfHorizontalPadding)
+            .padding(.vertical, HomeLayout.gridVerticalPadding)
 
             if model.state == .loadingMore {
                 ProgressView().tint(.white).padding(.vertical, 24)
@@ -913,7 +1023,97 @@ private struct SearchLandingView: View {
 
     private var isSearching: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
+    @ViewBuilder
     var body: some View {
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            mobileBody
+        } else {
+            desktopBody
+        }
+        #else
+        desktopBody
+        #endif
+    }
+
+    #if os(iOS)
+    private var mobileBody: some View {
+        Group {
+            if isSearching {
+                SearchResultsView(
+                    state: searchState,
+                    suggestions: suggestions,
+                    fallbackName: fallbackName,
+                    onPick: { query = $0 }
+                )
+            } else {
+                mobileLanding
+            }
+        }
+        .navigationTitle("Buscar")
+        .navigationBarTitleDisplayMode(.inline)
+        .searchable(
+            text: $query,
+            placement: .navigationBarDrawer(displayMode: .always),
+            prompt: "Películas, series y animes"
+        )
+        .autocorrectionDisabled()
+    }
+
+    private var mobileLanding: some View {
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 28) {
+                if !recentlyViewed.items.isEmpty {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Text("Vistos recientemente")
+                                .font(.title3.weight(.semibold))
+                                .foregroundStyle(.white)
+                            Spacer()
+                            Button("Borrar", systemImage: "trash") { recentlyViewed.clear() }
+                                .labelStyle(.iconOnly)
+                                .buttonStyle(.glass)
+                                .tint(.white.opacity(0.12))
+                                .accessibilityLabel("Borrar vistos recientemente")
+                        }
+
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            LazyHStack(alignment: .top, spacing: 12) {
+                                ForEach(recentlyViewed.items) { item in
+                                    PosterCard(item: item, width: 132, showsMetadata: true)
+                                }
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .contentMargins(.horizontal, 16, for: .scrollContent)
+                        .contentMargins(.horizontal, -16, for: .scrollIndicators)
+                        .padding(.horizontal, -16)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Explorar por categoría")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.white)
+
+                    LazyVGrid(columns: [GridItem(.flexible())], spacing: 12) {
+                        ForEach(SidebarCategory.browsable) { category in
+                            CategoryTile(category: category) {
+                                onSelectCategory(category)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 48)
+        }
+        .scrollDismissesKeyboard(.interactively)
+    }
+    #endif
+
+    private var desktopBody: some View {
         VStack(spacing: 0) {
             searchField
             if isSearching {
@@ -1020,7 +1220,51 @@ private struct CategoryTile: View {
     let action: () -> Void
     @State private var hovering = false
 
+    @ViewBuilder
     var body: some View {
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            phoneTile
+        } else {
+            desktopTile
+        }
+        #else
+        desktopTile
+        #endif
+    }
+
+    #if os(iOS)
+    private var phoneTile: some View {
+        Button(action: action) {
+            HStack(spacing: 14) {
+                Image(systemName: category.icon)
+                    .font(.system(size: 20, weight: .semibold))
+                    .frame(width: 38, height: 38)
+                    .background(.white.opacity(0.12), in: Circle())
+
+                Text(category.title)
+                    .font(.headline)
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(.white.opacity(0.5))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 16)
+            .frame(maxWidth: .infinity, minHeight: 64)
+            .contentShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .glassEffect(
+            .regular.tint(category.gradientColors[0].opacity(0.22)).interactive(),
+            in: RoundedRectangle(cornerRadius: 20, style: .continuous)
+        )
+    }
+    #endif
+
+    private var desktopTile: some View {
         Button(action: action) {
             ZStack(alignment: .bottomLeading) {
                 LinearGradient(
@@ -1105,8 +1349,21 @@ private struct StreamingSection: View {
             .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
     }
 
+    @ViewBuilder
     var body: some View {
         let availability = streaming[effectiveCountry]
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            mobileBody(availability: availability)
+        } else {
+            desktopBody(availability: availability)
+        }
+        #else
+        desktopBody(availability: availability)
+        #endif
+    }
+
+    private func desktopBody(availability: StreamingAvailability?) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
                 Text("Dónde ver")
@@ -1137,6 +1394,66 @@ private struct StreamingSection: View {
         }
         .padding(.top, 6)
     }
+
+    #if os(iOS)
+    private func mobileBody(availability: StreamingAvailability?) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Dónde ver")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    countryPicker
+                    platformPicker
+                }
+                .padding(.vertical, 2)
+            }
+
+            if let availability {
+                mobileGroup("Suscripción", availability.subscription)
+                mobileGroup("Gratis", availability.free)
+            }
+
+            if let selectedProvider {
+                countriesPanel(for: selectedProvider)
+            }
+
+            HStack(spacing: 4) {
+                Text("Datos de JustWatch")
+                if let link = availability?.link {
+                    Link("· Abrir", destination: link)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.white.opacity(0.42))
+        }
+    }
+
+    @ViewBuilder
+    private func mobileGroup(_ title: String, _ providers: [StreamingProvider]) -> some View {
+        if !providers.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(title)
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.55))
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: 12) {
+                        ForEach(providers) { provider in
+                            ProviderTile(provider: provider, isSelected: provider == selectedProvider, size: 72) {
+                                selectedProvider = provider == selectedProvider ? nil : provider
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                }
+                .padding(.horizontal, -16)
+            }
+        }
+    }
+    #endif
 
     private var countryPicker: some View {
         SearchablePicker(
@@ -1351,11 +1668,11 @@ private struct SearchablePicker: View {
 private struct ProviderTile: View {
     let provider: StreamingProvider
     let isSelected: Bool
+    var size: CGFloat = 120
     let action: () -> Void
     @State private var hovering = false
     @State private var brand: Color?
 
-    private let size: CGFloat = 120
     private var active: Bool { hovering || isSelected }
     private var accent: Color { brand ?? .white }
 
@@ -1476,7 +1793,7 @@ private struct SearchResultsView: View {
                         )
                     }
                 }
-                .padding(36)
+                .padding(horizontalPadding)
             }
         case .failed:
             ScrollView {
@@ -1491,7 +1808,7 @@ private struct SearchResultsView: View {
                         )
                     }
                 }
-                .padding(36)
+                .padding(horizontalPadding)
             }
         case .results(let items):
             ScrollView {
@@ -1499,17 +1816,60 @@ private struct SearchResultsView: View {
                     if let fallbackName {
                         FallbackBanner(name: fallbackName)
                     }
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 12, alignment: .top)], alignment: .leading, spacing: 12) {
-                        ForEach(items) { item in
-                            PosterCard(item: item)
-                        }
-                    }
+                    resultsGrid(items)
                     if !suggestions.isEmpty {
                         SuggestionsDisclosure(suggestions: suggestions, onPick: onPick)
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
                 }
-                .padding(36)
+                .padding(horizontalPadding)
+            }
+        }
+    }
+
+    private var horizontalPadding: CGFloat {
+        #if os(iOS)
+        UIDevice.current.userInterfaceIdiom == .phone ? 16 : 36
+        #else
+        36
+        #endif
+    }
+
+    @ViewBuilder
+    private func resultsGrid(_ items: [CatalogItem]) -> some View {
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            phoneResultsGrid(items)
+        } else {
+            desktopResultsGrid(items)
+        }
+        #else
+        desktopResultsGrid(items)
+        #endif
+    }
+
+    #if os(iOS)
+    private func phoneResultsGrid(_ items: [CatalogItem]) -> some View {
+        LazyVGrid(
+            columns: [GridItem(.flexible(), spacing: 12), GridItem(.flexible())],
+            alignment: .leading,
+            spacing: 20
+        ) {
+            ForEach(items) { item in
+                PosterCard(item: item, width: nil, showsMetadata: true)
+            }
+        }
+    }
+    #endif
+
+    private func desktopResultsGrid(_ items: [CatalogItem]) -> some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 190), spacing: 12, alignment: .top)],
+            alignment: .leading,
+            spacing: 12
+        ) {
+            ForEach(items) { item in
+                PosterCard(item: item)
             }
         }
     }
@@ -1529,6 +1889,21 @@ private struct FallbackBanner: View {
     let name: String
 
     var body: some View {
+        #if os(iOS)
+        Label {
+            Text("Resultados para “\(name)”")
+                .font(.callout.weight(.semibold))
+                .lineLimit(2)
+        } icon: {
+            Image(systemName: "sparkles")
+                .foregroundStyle(.yellow)
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        #else
         HStack(spacing: 10) {
             Image(systemName: "sparkles")
                 .foregroundStyle(.yellow)
@@ -1542,6 +1917,7 @@ private struct FallbackBanner: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 10)
         .glassEffect(.regular, in: Capsule())
+        #endif
     }
 }
 
@@ -1846,10 +2222,10 @@ private struct HeroView: View {
     @State private var tmdbBackdropURL: URL?
     @State private var qualityTiers: [QualityTier] = []
     @State private var hasWebDL = false
+    @AppStorage(ArtworkQuality.storageKey) private var artworkQuality = ArtworkQuality.high
 
     #if os(iOS)
     private let centered = true
-    private let heroHeight: CGFloat = 650
     #else
     private let centered = false
     #endif
@@ -1947,44 +2323,88 @@ private struct HeroView: View {
         .frame(maxWidth: .infinity)
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
         #else
-        .frame(height: heroHeight)
+        // Los pósteres verticales de TMDB son normalmente 2:3. El hero adopta
+        // esa proporción para mostrarlos completos, sin el recorte del antiguo 9:16.
+        .frame(maxWidth: .infinity)
+        .aspectRatio(2.0 / 3.0, contentMode: .fit)
         #endif
-        .task(id: shouldLoad) {
-            guard shouldLoad, tmdbBackdropURL == nil else { return }
+        .task(id: HeroTaskKey(shouldLoad: shouldLoad, quality: artworkQuality)) {
+            guard shouldLoad else { return }
             async let images = TMDBService.shared.images(for: item)
             async let downloads = (try? await LaMovieAPI.downloads(postId: item.id)) ?? []
+            #if os(iOS)
+            async let appleTall = AppleTVArtwork.shared.tallPoster(for: item, quality: artworkQuality)
+            let (resolvedImages, resolvedDownloads, resolvedTall) = await (images, downloads, appleTall)
+            #else
             let (resolvedImages, resolvedDownloads) = await (images, downloads)
+            #endif
             qualityTiers = resolvedDownloads.qualityTiers
             hasWebDL = resolvedDownloads.contains(where: \.isWebDL)
             #if os(iOS)
-            // En móvil el hero es vertical: se usa la portada sin texto (el logo va aparte encima).
-            tmdbBackdropURL = resolvedImages.heroPoster ?? resolvedImages.backdrop
+            // Se prioriza una portada vertical sin idioma declarado; si no existe,
+            // cualquier otra portada vertical evita el recorte extremo de un fondo 16:9.
+            // El backdrop horizontal queda únicamente como último recurso.
+            tmdbBackdropURL = resolvedTall
+                ?? resolvedImages.heroPoster
+                ?? resolvedImages.poster
+                ?? item.images.posterURL
+                ?? resolvedImages.backdrop
             #else
             tmdbBackdropURL = resolvedImages.backdrop
             #endif
         }
     }
+
+    private struct HeroTaskKey: Hashable {
+        let shouldLoad: Bool
+        let quality: ArtworkQuality
+    }
 }
 
 // MARK: - Rows
+
+/// Medidas del inicio: el iPhone usa filas más compactas y pósters más pequeños.
+enum HomeLayout {
+    #if os(iOS)
+    static let sectionSpacing: CGFloat = 10
+    static let shelfHorizontalPadding: CGFloat = 20
+    static let shelfVerticalPadding: CGFloat = 8
+    static let cardSpacing: CGFloat = 8
+    static let cardWidth: CGFloat = 118
+    /// Tres columnas en iPhone vertical; el póster ocupa todo el ancho de su columna.
+    static let gridMinimumCardWidth: CGFloat = 100
+    static let gridCardWidth: CGFloat? = nil
+    static let gridVerticalPadding: CGFloat = 16
+    #else
+    static let sectionSpacing: CGFloat = 20
+    static let shelfHorizontalPadding: CGFloat = 36
+    static let shelfVerticalPadding: CGFloat = 16
+    static let cardSpacing: CGFloat = 12
+    static let cardWidth: CGFloat = 190
+    static let gridMinimumCardWidth: CGFloat = 190
+    static let gridCardWidth: CGFloat? = 190
+    static let gridVerticalPadding: CGFloat = 36
+    #endif
+}
 
 private struct ShelfView: View {
     let shelf: Shelf
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(shelf.title)
                 .font(.system(.title3, design: .rounded).weight(.semibold))
                 .foregroundStyle(.white.opacity(0.92))
-                .padding(.horizontal, 36)
+                .padding(.horizontal, HomeLayout.shelfHorizontalPadding)
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 12) {
+                LazyHStack(alignment: .top, spacing: HomeLayout.cardSpacing) {
                     ForEach(shelf.items) { item in
-                        PosterCard(item: item)
+                        PosterCard(item: item, width: HomeLayout.cardWidth)
                     }
                 }
-                .padding(.horizontal, 36)
-                .padding(.vertical, 16)
+                .padding(.horizontal, HomeLayout.shelfHorizontalPadding)
+                // Margen para que el zoom del hover no se corte.
+                .padding(.vertical, HomeLayout.shelfVerticalPadding)
             }
         }
     }
@@ -1992,8 +2412,11 @@ private struct ShelfView: View {
 
 private struct PosterCard: View {
     let item: CatalogItem
+    var width: CGFloat? = 190
+    var showsMetadata = false
     @State private var hovering = false
     @State private var tmdbPosterURL: URL?
+    @AppStorage(ArtworkQuality.storageKey) private var artworkQuality = ArtworkQuality.high
     @EnvironmentObject private var router: NavigationRouter
     @EnvironmentObject private var recentlyViewed: RecentlyViewedStore
 
@@ -2008,36 +2431,54 @@ private struct PosterCard: View {
         }
         .buttonStyle(.plain)
         .pointerCursor()
-        .task(id: item.id) { tmdbPosterURL = await TMDBService.shared.images(for: item).poster }
+        .task(id: "\(item.id)|\(artworkQuality.rawValue)") {
+            tmdbPosterURL = await TMDBService.shared.images(for: item).poster
+        }
     }
 
     private var cardBody: some View {
-        Brand.card
-            .aspectRatio(2.0 / 3.0, contentMode: .fit)
-            .overlay {
-                PosterImage(url: posterURL)
-                    .aspectRatio(contentMode: .fill)
-                    .clipped()
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(.white.opacity(hovering ? 1 : 0), lineWidth: 2)
-            )
-            .overlay(alignment: .topTrailing) {
-                if let rating = item.ratingText {
-                    Label(rating, systemImage: "star.fill")
-                        .font(.caption2.weight(.bold))
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 3)
-                        .foregroundStyle(.white)
-                        .glassEffect(.regular, in: Capsule())
-                        .padding(6)
+        VStack(alignment: .leading, spacing: showsMetadata ? 8 : 0) {
+            Brand.card
+                .aspectRatio(2.0 / 3.0, contentMode: .fit)
+                .overlay {
+                    PosterImage(url: posterURL)
+                        .aspectRatio(contentMode: .fill)
+                        .clipped()
                 }
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(.white.opacity(hovering ? 1 : 0), lineWidth: 2)
+                )
+                .overlay(alignment: .topTrailing) {
+                    if let rating = item.ratingText {
+                        Label(rating, systemImage: "star.fill")
+                            .font(.caption2.weight(.bold))
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 3)
+                            .foregroundStyle(.white)
+                            .glassEffect(.regular, in: Capsule())
+                            .padding(6)
+                    }
+                }
+
+            if showsMetadata {
+                Text(item.displayTitle)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+
+                Text([item.kind.label, item.year].compactMap { $0 }.joined(separator: " · "))
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.52))
+                    .lineLimit(1)
             }
-            .frame(width: 190)
-            .animation(.easeInOut(duration: 0.15), value: hovering)
-            .onHover { hovering = $0 }
+        }
+        .frame(maxWidth: width == nil ? .infinity : nil, alignment: .leading)
+        .frame(width: width)
+        .animation(.easeInOut(duration: 0.15), value: hovering)
+        .onHover { hovering = $0 }
     }
 }
 
@@ -2132,6 +2573,8 @@ struct DetailView: View {
     /// No-nil cuando se muestra como tarjeta flotante sobre el catálogo (en vez de
     /// empujada a pantalla completa); permite cerrarla y deja ver la vista de atrás.
     var onDismiss: (() -> Void)?
+    /// En iPhone la navegación lateral sigue disponible desde la ficha.
+    var onOpenSidebar: (() -> Void)?
 
     @State private var seasons: [Int] = []
     @State private var season: Int?
@@ -2141,14 +2584,19 @@ struct DetailView: View {
     @State private var seasonRequest: SeasonDownloadRequest?
     @State private var tmdbDetails: TMDBDetails?
     @State private var tmdbBackdropURL: URL?
+    @State private var tmdbPortraitURL: URL?
+    /// El póster vertical viene sin título rotulado (Apple TV): se pone el logo encima.
+    @State private var portraitIsTextless = false
     @State private var qualityTiers: [QualityTier] = []
     @State private var hasWebDL = false
+    @ObservedObject private var watchProgress = WatchProgressStore.shared
     @Environment(\.openURL) private var openURL
     @AppStorage("streamingCountry") private var streamingCountry = Locale.current.region?.identifier ?? "US"
+    @AppStorage(ArtworkQuality.storageKey) private var artworkQuality = ArtworkQuality.high
     /// La ficha no se muestra hasta tener portada, logo, sinopsis y calidades.
     @State private var ready = false
 
-    private var isSeries: Bool { item.kind != .movies }
+    private var isSeries: Bool { item.kind.isEpisodic }
 
     /// Sinopsis: se prefiere la de TMDB (en español) si está disponible.
     private var overviewText: String {
@@ -2156,10 +2604,42 @@ struct DetailView: View {
         return item.overview
     }
 
+    #if os(iOS)
+    /// iPadOS comparte SDK con iOS; el tipo de dispositivo es el corte correcto
+    /// para mantener allí la ficha amplia y usar la compacta solo en iPhone.
+    private var usesPhoneLayout: Bool { UIDevice.current.userInterfaceIdiom == .phone }
+    #endif
+
     var body: some View {
         ZStack {
             AppBackground()
 
+            #if os(iOS)
+            if usesPhoneLayout {
+                GeometryReader { proxy in
+                    ScrollView {
+                        card
+                            .frame(width: proxy.size.width, alignment: .leading)
+                    }
+                    .frame(width: proxy.size.width)
+                    .scrollIndicators(.hidden)
+                    // iOS 26 añade por defecto un degradado oscuro en ambos
+                    // extremos del scroll. Aquí el póster debe llegar limpio al borde.
+                    .scrollEdgeEffectHidden(true, for: .all)
+                    .ignoresSafeArea(edges: .top)
+                    .opacity(ready ? 1 : 0)
+                }
+            } else {
+                ScrollView {
+                    card
+                        .padding(.bottom, 40)
+                        .frame(maxWidth: .infinity)
+                }
+                .scrollIndicators(.hidden)
+                .ignoresSafeArea(edges: .top)
+                .opacity(ready ? 1 : 0)
+            }
+            #else
             ScrollView {
                 card
                     .padding(.bottom, 40)
@@ -2168,6 +2648,7 @@ struct DetailView: View {
             .scrollIndicators(.hidden)
             .ignoresSafeArea(edges: .top)
             .opacity(ready ? 1 : 0)
+            #endif
 
             if !ready {
                 ProgressView()
@@ -2190,9 +2671,24 @@ struct DetailView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
+        #if os(iOS)
+        .navigationTitle(usesPhoneLayout ? "" : item.displayTitle)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarLeading) {
+                if let onOpenSidebar {
+                    Button("Abrir navegación", systemImage: "line.3.horizontal", action: onOpenSidebar)
+                        .labelStyle(.iconOnly)
+                }
+            }
+        }
+        .toolbarVisibility(.visible, for: .navigationBar)
+        .toolbarBackground(usesPhoneLayout ? .hidden : .automatic, for: .navigationBar)
+        #else
         .navigationTitle(item.displayTitle)
+        #endif
         .task(id: season) { await loadEpisodes() }
-        .task(id: item.id) { await loadEssentials() }
+        .task(id: "\(item.id)|\(artworkQuality.rawValue)") { await loadEssentials() }
         // Red de seguridad: si algo tarda demasiado, se muestra la ficha con lo que haya.
         .task(id: item.id) {
             try? await Task.sleep(for: .seconds(12))
@@ -2214,14 +2710,25 @@ struct DetailView: View {
     private func loadTMDBDetails() async {
         async let details = TMDBService.shared.details(for: item)
         async let images = TMDBService.shared.images(for: item)
-        let (resolvedDetails, resolvedImages) = await (details, images)
+        async let appleTall = AppleTVArtwork.shared.tallPoster(for: item, quality: artworkQuality)
+        let (resolvedDetails, resolvedImages, resolvedTall) = await (details, images, appleTall)
         let backdrop = resolvedImages.backdrop ?? resolvedImages.poster
-        // Portada y logo descargados antes de mostrar la ficha.
+        // Primero el póster alto sin texto de Apple TV; si no existe, el de TMDB
+        // (que suele traer el título rotulado, por eso entonces no se pone logo).
+        let portrait = resolvedTall
+            ?? resolvedImages.heroPoster
+            ?? resolvedImages.poster
+            ?? item.images.posterURL
+            ?? resolvedImages.backdrop
+        // Imágenes y logo descargados antes de mostrar la ficha.
         async let warmBackdrop: Void = prefetchImage(backdrop, category: .backdrop)
+        async let warmPortrait: Void = prefetchImage(portrait, category: .poster)
         async let warmLogo: Void = prefetchImage(resolvedImages.logo, category: .logo)
-        _ = await (warmBackdrop, warmLogo)
+        _ = await (warmBackdrop, warmPortrait, warmLogo)
         tmdbDetails = resolvedDetails
         tmdbBackdropURL = backdrop
+        tmdbPortraitURL = portrait
+        portraitIsTextless = resolvedTall != nil
     }
 
     /// Solo para películas: los episodios tienen su propia calidad por enlace.
@@ -2232,9 +2739,237 @@ struct DetailView: View {
         hasWebDL = downloads.contains(where: \.isWebDL)
     }
 
-    /// Ficha a pantalla completa cuya cabecera coincide en tamaño con el destino
-    /// de la animación de expansión del póster.
+    @ViewBuilder
     private var card: some View {
+        #if os(iOS)
+        if usesPhoneLayout {
+            iPhoneCard
+        } else {
+            desktopCard
+        }
+        #else
+        desktopCard
+        #endif
+    }
+
+    #if os(iOS)
+    /// Ficha creada específicamente para el ancho y la interacción de iPhone.
+    private var iPhoneCard: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            iPhoneHeader
+
+            VStack(alignment: .leading, spacing: 22) {
+                iPhoneActions
+
+                if let tagline = [tmdbDetails?.tagline, item.tagline]
+                    .compactMap({ $0 }).first(where: { !$0.isEmpty }) {
+                    Text(tagline)
+                        .font(.callout)
+                        .italic()
+                        .foregroundStyle(.white.opacity(0.62))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                if !overviewText.isEmpty {
+                    iPhoneSynopsis
+                }
+
+                // Como en las apps de streaming: los episodios justo después de la sinopsis.
+                if isSeries { episodesSection }
+
+                if let details = tmdbDetails {
+                    infoSection(details)
+                }
+
+                if let streaming = tmdbDetails?.streaming, !streaming.isEmpty {
+                    StreamingSection(streaming: streaming, country: $streamingCountry)
+                }
+
+                if let cast = tmdbDetails?.cast, !cast.isEmpty {
+                    castSection(cast)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 20)
+            .padding(.bottom, 28)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Brand.card)
+    }
+
+    private var iPhoneHeader: some View {
+        GeometryReader { proxy in
+            Brand.card
+                .overlay {
+                PosterImage(url: tmdbPortraitURL, category: .poster)
+                    .aspectRatio(contentMode: .fill)
+                    // El póster alto de Apple TV sobra por abajo; las caras suelen ir arriba.
+                    .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+                    .clipped()
+                }
+        }
+        .aspectRatio(2.0 / 3.0, contentMode: .fit)
+        .frame(maxWidth: .infinity)
+        // Metadatos y géneros sobre la parte baja del póster, con un
+        // degradado corto que funde la imagen con el fondo de la ficha.
+        .overlay(alignment: .bottomLeading) {
+            VStack(alignment: .leading, spacing: 10) {
+                // El logo solo si el póster no trae ya el título rotulado.
+                if portraitIsTextless {
+                    TitleLogo(item: item, textFont: .system(size: 32, weight: .bold, design: .rounded))
+                        .shadow(color: .black.opacity(0.6), radius: 12, y: 4)
+                }
+                DetailMetaRow(item: item, tiers: qualityTiers, hasWebDL: hasWebDL, fontSize: 14)
+                if !item.genreNames.isEmpty {
+                    Text(item.genreNames.joined(separator: " · "))
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.7))
+                        .lineLimit(1)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 60)
+            .padding(.bottom, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                LinearGradient(
+                    colors: [.clear, Brand.card.opacity(0.75), Brand.card],
+                    startPoint: .top, endPoint: .bottom
+                )
+            }
+        }
+        .clipped()
+    }
+
+    @ViewBuilder
+    private var iPhoneActions: some View {
+        VStack(spacing: 10) {
+            if !isSeries {
+                PlayButton(target: PlaybackTarget(
+                    postId: item.id,
+                    title: item.displayTitle,
+                    watch: WatchInfo(item: item)
+                )) {
+                    Label("Reproducir", systemImage: "play.fill")
+                        .font(.headline)
+                        .foregroundStyle(.black)
+                        .padding(.vertical, 14)
+                        .frame(maxWidth: .infinity)
+                        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .glassEffect(
+                    .regular.tint(.white).interactive(),
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                )
+
+                Button {
+                    downloadTarget = PlaybackTarget(postId: item.id, title: item.displayTitle)
+                } label: {
+                    iPhoneActionLabel("Descargar", systemImage: "arrow.down")
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            } else if let next = seriesPlayTarget {
+                // Series: mismas acciones que en películas, sobre el episodio
+                // pendiente (o el primero de la temporada elegida).
+                PlayButton(target: next.target) {
+                    Label(next.label, systemImage: "play.fill")
+                        .font(.headline)
+                        .foregroundStyle(.black)
+                        .padding(.vertical, 14)
+                        .frame(maxWidth: .infinity)
+                        .contentShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .glassEffect(
+                    .regular.tint(.white).interactive(),
+                    in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+                )
+
+                if let season, !episodes.isEmpty {
+                    Button {
+                        seasonRequest = SeasonDownloadRequest(
+                            seriesTitle: item.displayTitle,
+                            season: season,
+                            episodes: episodes
+                        )
+                    } label: {
+                        iPhoneActionLabel("Descargar temporada \(season)", systemImage: "arrow.down")
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+            } else if loadingEpisodes {
+                ProgressView().tint(.white).frame(maxWidth: .infinity).padding(.vertical, 14)
+            }
+
+            if let trailer = tmdbDetails?.trailer {
+                Button {
+                    if let url = URL(string: "https://www.youtube.com/watch?v=\(trailer.key)") { openURL(url) }
+                } label: {
+                    iPhoneActionLabel("Tráiler", systemImage: "play.rectangle")
+                }
+                .buttonStyle(.plain)
+                .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func iPhoneActionLabel(_ title: String, systemImage: String) -> some View {
+        Label(title, systemImage: systemImage)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.vertical, 12)
+            .frame(maxWidth: .infinity)
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var iPhoneSynopsis: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Sinopsis")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
+            Text(overviewText)
+                .font(.body)
+                .lineSpacing(4)
+                .foregroundStyle(.white.opacity(0.82))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(.white.opacity(0.08), lineWidth: 1)
+        )
+    }
+    #endif
+
+    /// Episodio que abre el botón principal de una serie: el que se dejó a medias
+    /// o, si no hay progreso, el primero de la temporada seleccionada.
+    private var seriesPlayTarget: (target: PlaybackTarget, label: String)? {
+        if let entry = watchProgress.entries.first(where: { $0.item.id == item.id }),
+           let season = entry.season, let episode = entry.episode {
+            return (entry.target, "Continuar T\(season):E\(episode)")
+        }
+        guard let episode = episodes.first else { return nil }
+        let target = PlaybackTarget(
+            postId: episode.id,
+            title: "\(item.displayTitle) · T\(episode.seasonNumber) E\(episode.episodeNumber)",
+            watch: WatchInfo(
+                item: item,
+                season: episode.seasonNumber,
+                episode: episode.episodeNumber,
+                episodeTitle: episode.title
+            )
+        )
+        return (target, "Reproducir T\(episode.seasonNumber):E\(episode.episodeNumber)")
+    }
+
+    /// Ficha de escritorio; conserva el layout amplio de macOS.
+    private var desktopCard: some View {
         VStack(alignment: .leading, spacing: 0) {
             ZStack(alignment: .bottomLeading) {
                 Color.clear
@@ -2285,6 +3020,36 @@ struct DetailView: View {
                                 .buttonStyle(.plain)
                                 .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
                                 .pointerCursor()
+                        } else if let next = seriesPlayTarget {
+                            PlayButton(target: next.target) {
+                                Label(next.label, systemImage: "play.fill")
+                                    .font(.headline)
+                                    .padding(.horizontal, 28)
+                                    .padding(.vertical, 14)
+                                    .foregroundStyle(.black)
+                                    .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            }
+                            .buttonStyle(.plain)
+                            .glassEffect(.regular.tint(.white).interactive(), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .pointerCursor()
+
+                            if let season, !episodes.isEmpty {
+                                Button {
+                                    seasonRequest = SeasonDownloadRequest(seriesTitle: item.displayTitle, season: season, episodes: episodes)
+                                } label: {
+                                    Label("Descargar temporada \(season)", systemImage: "arrow.down")
+                                        .font(.headline)
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 24)
+                                        .padding(.vertical, 14)
+                                        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                }
+                                .buttonStyle(.plain)
+                                .glassEffect(.regular.interactive(), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                                .pointerCursor()
+                            }
+                        } else if loadingEpisodes {
+                            ProgressView().tint(.white).padding(.vertical, 14)
                         }
 
                         if let trailer = tmdbDetails?.trailer {
@@ -2329,6 +3094,8 @@ struct DetailView: View {
                     SynopsisSection(text: overviewText)
                 }
 
+                if isSeries { episodesSection }
+
                 if let details = tmdbDetails {
                     infoSection(details)
                 }
@@ -2340,8 +3107,6 @@ struct DetailView: View {
                 if let cast = tmdbDetails?.cast, !cast.isEmpty {
                     castSection(cast)
                 }
-
-                if isSeries { episodesSection }
             }
             .padding(.horizontal, DetailCard.contentHorizontalPadding)
             .padding(.top, 24)
@@ -2383,24 +3148,72 @@ struct DetailView: View {
     private func infoSection(_ details: TMDBDetails) -> some View {
         let rows = infoRows(details)
         if !rows.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Información")
-                    .font(.system(.title3, design: .rounded).weight(.semibold))
-                    .foregroundStyle(.white)
-                ForEach(rows, id: \.0) { label, value in
-                    HStack(alignment: .firstTextBaseline, spacing: 12) {
-                        Text(label)
+            #if os(iOS)
+            if usesPhoneLayout {
+                iPhoneInfoRows(rows)
+            } else {
+                desktopInfoRows(rows)
+            }
+            #else
+            desktopInfoRows(rows)
+            #endif
+        }
+    }
+
+    #if os(iOS)
+    private func iPhoneInfoRows(_ rows: [(String, String)]) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Información")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.white)
+
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(row.0)
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.48))
+                        Text(row.1)
                             .font(.subheadline)
-                            .foregroundStyle(.white.opacity(0.5))
-                            .frame(width: 130, alignment: .leading)
-                        Text(value)
-                            .font(.subheadline)
-                            .foregroundStyle(.white.opacity(0.85))
+                            .foregroundStyle(.white.opacity(0.88))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.vertical, 11)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if index < rows.count - 1 {
+                        Divider().overlay(.white.opacity(0.08))
                     }
                 }
             }
-            .padding(.top, 6)
+            .padding(.horizontal, 16)
+            .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .stroke(.white.opacity(0.08), lineWidth: 1)
+            )
         }
+    }
+    #endif
+
+    private func desktopInfoRows(_ rows: [(String, String)]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Información")
+                .font(.system(.title3, design: .rounded).weight(.semibold))
+                .foregroundStyle(.white)
+            ForEach(rows, id: \.0) { label, value in
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text(label)
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.5))
+                        .frame(width: 130, alignment: .leading)
+                    Text(value)
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+            }
+        }
+        .padding(.top, 6)
     }
 
     @ViewBuilder
@@ -2449,26 +3262,24 @@ struct DetailView: View {
 
     @ViewBuilder
     private var episodesSection: some View {
+        #if os(iOS)
+        if usesPhoneLayout {
+            mobileEpisodesSection
+        } else {
+            desktopEpisodesSection
+        }
+        #else
+        desktopEpisodesSection
+        #endif
+    }
+
+    @ViewBuilder
+    private var desktopEpisodesSection: some View {
         HStack {
             Text("Episodios")
                 .font(.system(.title3, design: .rounded).weight(.semibold))
                 .foregroundStyle(.white)
             Spacer()
-            if let season, !episodes.isEmpty {
-                Button {
-                    seasonRequest = SeasonDownloadRequest(seriesTitle: item.displayTitle, season: season, episodes: episodes)
-                } label: {
-                    Label("Descargar temporada", systemImage: "arrow.down.circle")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .contentShape(Capsule())
-                }
-                .buttonStyle(.plain)
-                .glassEffect(.regular.interactive(), in: Capsule())
-                .pointerCursor()
-            }
             if seasons.count > 1 {
                 Picker("Temporada", selection: $season) {
                     ForEach(seasons, id: \.self) { Text("Temporada \($0)").tag(Optional($0)) }
@@ -2510,6 +3321,63 @@ struct DetailView: View {
         }
     }
 
+    #if os(iOS)
+    private var mobileEpisodesSection: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                Text("Episodios")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.white)
+                Spacer()
+                if seasons.count > 1 {
+                    Picker("Temporada", selection: $season) {
+                        ForEach(seasons, id: \.self) { Text("T\($0)").tag(Optional($0)) }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .fixedSize()
+                }
+            }
+
+            if loadingEpisodes && episodes.isEmpty {
+                ProgressView().tint(.white).frame(maxWidth: .infinity)
+            }
+
+            ForEach(episodes) { episode in
+                let episodeTitle = "\(item.displayTitle) · T\(episode.seasonNumber) E\(episode.episodeNumber)"
+                HStack(spacing: 6) {
+                    PlayButton(target: PlaybackTarget(
+                        postId: episode.id,
+                        title: episodeTitle,
+                        watch: WatchInfo(
+                            item: item,
+                            season: episode.seasonNumber,
+                            episode: episode.episodeNumber,
+                            episodeTitle: episode.title
+                        )
+                    )) {
+                        EpisodeRow(episode: episode, compact: true)
+                    }
+                    .buttonStyle(.plain)
+
+                    Button {
+                        downloadTarget = PlaybackTarget(postId: episode.id, title: episodeTitle)
+                    } label: {
+                        Image(systemName: "arrow.down")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 38, height: 38)
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: Circle())
+                    .accessibilityLabel("Descargar episodio \(episode.episodeNumber)")
+                }
+            }
+        }
+    }
+    #endif
+
     private func loadEpisodes() async {
         guard isSeries else { return }
         loadingEpisodes = true
@@ -2523,12 +3391,13 @@ struct DetailView: View {
 
 private struct EpisodeRow: View {
     let episode: Episode
+    var compact = false
     @State private var hovering = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 16) {
             Brand.card
-                .frame(width: 150, height: 84)
+                .frame(width: compact ? 108 : 150, height: compact ? 64 : 84)
                 .overlay {
                     CachedAsyncImage(url: episode.stillURL, category: .episode) { image in
                         image.resizable().scaledToFill()
@@ -2559,7 +3428,7 @@ private struct EpisodeRow: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(12)
+        .padding(compact ? 8 : 12)
         .background(.white.opacity(hovering ? 0.06 : 0), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }

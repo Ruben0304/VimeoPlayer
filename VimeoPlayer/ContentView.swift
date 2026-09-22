@@ -22,7 +22,7 @@ struct ContentView: View {
         case .direct:
             VideoWebView(url: embedURL)
                 .ignoresSafeArea()
-                .overlay(alignment: .topTrailing) {
+                .autoHidingControls {
                     ModeMenu(mode: $mode)
                         .padding(.top, controlsTopInset)
                         .padding(.trailing, 16)
@@ -74,8 +74,9 @@ private struct AcceleratedPlayerView: View {
             }
         }
         .ignoresSafeArea()
-        // El selector de modo está siempre a mano, también mientras carga o si algo falla.
-        .overlay(alignment: .topTrailing) { controls }
+        // Mientras carga o si algo falla, el selector de modo queda fijo a mano;
+        // con el vídeo listo se oculta como los controles nativos.
+        .autoHidingControls(pinned: !model.isReady || model.playbackError != nil) { controls }
         .task {
             await model.load()
         }
@@ -145,6 +146,81 @@ private struct BufferBadge: View {
         let minutes = Int(seconds) / 60
         if minutes >= 60 { return "\(minutes / 60) h \(minutes % 60) min" }
         return minutes >= 1 ? "\(minutes) min" : "\(Int(seconds)) s"
+    }
+}
+
+// MARK: - Controles que se ocultan solos
+
+private extension View {
+    func autoHidingControls<Controls: View>(
+        pinned: Bool = false,
+        @ViewBuilder controls: @escaping () -> Controls
+    ) -> some View {
+        modifier(AutoHidingControls(pinned: pinned, controls: controls))
+    }
+}
+
+/// Como los controles del reproductor nativo: en Mac aparecen al mover el ratón
+/// sobre el vídeo y en iOS al tocarlo; se esconden solos tras unos segundos.
+private struct AutoHidingControls<Controls: View>: ViewModifier {
+    var pinned: Bool
+    let controls: () -> Controls
+
+    @State private var visible = true
+    @State private var hoveringControls = false
+    @State private var hideTask: Task<Void, Never>?
+
+    private var shown: Bool { pinned || visible }
+
+    func body(content: Content) -> some View {
+        content
+            #if os(iOS)
+            // Simultáneo para no quitarle el toque al reproductor, que también
+            // muestra u oculta sus propios controles.
+            .simultaneousGesture(TapGesture().onEnded { visible ? hide() : show() })
+            #endif
+            .overlay(alignment: .topTrailing) {
+                controls()
+                    #if os(macOS)
+                    .onHover { hovering in
+                        hoveringControls = hovering
+                        if hovering { show() } else { scheduleHide() }
+                    }
+                    #endif
+                    .opacity(shown ? 1 : 0)
+                    .allowsHitTesting(shown)
+            }
+            #if os(macOS)
+            .onContinuousHover { phase in
+                switch phase {
+                case .active: show()
+                case .ended: if !hoveringControls { hide() }
+                }
+            }
+            #endif
+            .animation(.easeInOut(duration: 0.2), value: shown)
+            .onAppear { scheduleHide() }
+            .onChange(of: pinned) { if !pinned { scheduleHide() } }
+            .onDisappear { hideTask?.cancel() }
+    }
+
+    private func show() {
+        visible = true
+        scheduleHide()
+    }
+
+    private func hide() {
+        hideTask?.cancel()
+        visible = false
+    }
+
+    private func scheduleHide() {
+        hideTask?.cancel()
+        hideTask = Task {
+            try? await Task.sleep(for: .seconds(3))
+            guard !Task.isCancelled, !hoveringControls else { return }
+            visible = false
+        }
     }
 }
 

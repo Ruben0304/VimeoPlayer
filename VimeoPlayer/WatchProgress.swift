@@ -126,18 +126,18 @@ struct ContinueWatchingShelf: View {
     @ObservedObject var store: WatchProgressStore
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: 8) {
             Text("Continuar viendo")
                 .font(.system(.title3, design: .rounded).weight(.semibold))
                 .foregroundStyle(.white.opacity(0.92))
-                .padding(.horizontal, 36)
+                .padding(.horizontal, HomeLayout.shelfHorizontalPadding)
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(alignment: .top, spacing: 16) {
+                LazyHStack(alignment: .top, spacing: HomeLayout.cardSpacing) {
                     ForEach(store.entries) { entry in
                         ContinueCard(entry: entry, store: store)
                     }
                 }
-                .padding(.horizontal, 36)
+                .padding(.horizontal, HomeLayout.shelfHorizontalPadding)
                 .padding(.vertical, 8)
             }
         }
