@@ -115,3 +115,50 @@ extension View {
         modifier(ToastModifier(toast: toast))
     }
 }
+
+/// Loader de arranque al estilo HBO Max: anillo con estela en degradado que gira
+/// sin parar, con la punta brillante y un halo suave. En tonos rojizos.
+struct BrandLoader: View {
+    var size: CGFloat = 54
+    var lineWidth: CGFloat = 4
+    /// Segundos por vuelta.
+    private let period = 0.85
+    /// Fracción del anillo que ocupa la estela.
+    private let arc = 0.8
+
+    private static let tail = Color(red: 0.32, green: 0.0, blue: 0.04)
+    private static let mid = Color(red: 0.86, green: 0.06, blue: 0.13)
+    private static let head = Color(red: 1.0, green: 0.36, blue: 0.3)
+
+    var body: some View {
+        TimelineView(.animation) { context in
+            let t = context.date.timeIntervalSinceReferenceDate
+            let turn = t.truncatingRemainder(dividingBy: period) / period
+            ring.rotationEffect(.degrees(turn * 360))
+        }
+        .frame(width: size, height: size)
+        .accessibilityElement()
+        .accessibilityLabel("Cargando")
+    }
+
+    private var ring: some View {
+        Circle()
+            .trim(from: 0, to: arc)
+            .stroke(
+                AngularGradient(
+                    stops: [
+                        .init(color: Self.tail.opacity(0), location: 0),
+                        .init(color: Self.tail, location: 0.3),
+                        .init(color: Self.mid, location: 0.75),
+                        .init(color: Self.head, location: 1),
+                    ],
+                    center: .center,
+                    startAngle: .zero,
+                    endAngle: .degrees(360 * arc)
+                ),
+                style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
+            )
+            .shadow(color: Self.mid.opacity(0.55), radius: lineWidth * 1.5)
+            .padding(lineWidth / 2)
+    }
+}

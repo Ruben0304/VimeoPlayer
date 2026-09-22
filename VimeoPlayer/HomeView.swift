@@ -27,12 +27,11 @@ final class HomeViewModel: ObservableObject {
     func load() async {
         if shelves.isEmpty { state = .loading }
 
-        // Mismas filas y en el mismo orden que la portada de lamovie.org.
+        // Mismas filas y en el mismo orden que la portada de lamovie.org, salvo "Series
+        // actualizadas": la API ignora `orderBy=post_modified` y devolvía lo mismo que
+        // "Series recién añadidas" (en la web sale igual de repetida).
         async let movies = fetch("movies", "Películas recién añadidas") { try await LaMovieAPI.listing(.movies) }
         async let series = fetch("series", "Series recién añadidas") { try await LaMovieAPI.listing(.tvshows) }
-        async let updated = fetch("seriesUpdated", "Series actualizadas") {
-            try await LaMovieAPI.listing(.tvshows, orderBy: "post_modified")
-        }
         async let animes = fetch("animes", "Animes recién añadidos") { try await LaMovieAPI.listing(.animes) }
         async let wwe = fetch("wwe", "WWE") { try await LaMovieAPI.listing(.wwe, orderBy: "ID", perPage: 16) }
         async let novels = fetch("novels", "La Hora del Drama") {
@@ -44,7 +43,7 @@ final class HomeViewModel: ObservableObject {
         }
 
         // Una fila que falla no debe tumbar el resto de la pantalla.
-        let loaded = await [movies, series, updated, animes, wwe, novels, popular, kids].compactMap { $0 }
+        let loaded = await [movies, series, animes, wwe, novels, popular, kids].compactMap { $0 }
         if loaded.isEmpty {
             if shelves.isEmpty { state = .failed }
         } else {
@@ -115,105 +114,53 @@ final class SearchViewModel: ObservableObject {
     @Published private(set) var suggestions: [TitleSuggestion] = []
     /// Nombre alternativo con el que se encontraron resultados cuando el escrito no dio ninguno.
     @Published private(set) var fallbackName: String?
+    /// Títulos cuya trama encaja con lo escrito (búsqueda local sobre las sinopsis).
+    @Published private(set) var related: [CatalogItem] = []
+    /// Buscar solo con Apple Intelligence (botón de la barra de Buscar), en lugar de la búsqueda normal.
+    @Published var usesAI = UserDefaults.standard.bool(forKey: "aiSearch") {
+        didSet {
+            UserDefaults.standard.set(usesAI, forKey: "aiSearch")
+            if usesAI { AISearch.prewarm() }
+        }
+    }
 
     /// Se llama con cada cambio del texto; la tarea anterior se cancela sola.
     func run(_ raw: String) async {
         let query = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if query.isEmpty { state = .idle; suggestions = []; fallbackName = nil; return }
-        if query.count < 3 { state = .tooShort; suggestions = []; fallbackName = nil; return }
+        if query.isEmpty { state = .idle; suggestions = []; fallbackName = nil; related = []; return }
+        if query.count < 2 { state = .tooShort; suggestions = []; fallbackName = nil; related = []; return }
 
         state = .loading
         suggestions = []
         fallbackName = nil
-        try? await Task.sleep(for: .milliseconds(400))
-        if Task.isCancelled { return }
-
-        // TMDB (traducción y sugerencias) va en paralelo y nunca retrasa los resultados:
-        // lo escrito se busca de inmediato y lo demás se suma cuando llega.
-        async let extras = Self.extras(for: query)
-        let raw = await Result { try await LaMovieAPI.search(query) }
-        if Task.isCancelled { return }
-
-        if case .success(let hits) = raw, !hits.isEmpty {
-            state = .results(hits)
-            let (translated, found) = await extras
+        related = []
+        if usesAI, AISearch.isAvailable {
+            // El modelo tarda unos segundos: se espera a que se deje de escribir.
+            try? await Task.sleep(for: .milliseconds(700))
             if Task.isCancelled { return }
-            suggestions = found
-            if let translated, translated.lowercased() != query.lowercased(),
-               let more = try? await LaMovieAPI.search(translated), !Task.isCancelled {
-                var seen = Set(hits.map(\.id))
-                let added = more.filter { seen.insert($0.id).inserted }
-                if !added.isEmpty { state = .results(hits + added) }
+            do {
+                let items = try await AISearch.run(query)
+                if Task.isCancelled { return }
+                state = items.isEmpty ? .empty : .results(items)
+            } catch {
+                AISearch.log.error("\(query, privacy: .public): \(error, privacy: .public)")
+                if !Task.isCancelled { state = .failed }
             }
             return
         }
-
-        // Sin resultados con lo escrito: se prueba la traducción y, si hace falta, los otros nombres.
-        let (translated, found) = await extras
+        // En local la búsqueda es inmediata; la espera solo evita lanzar TMDB con cada tecla.
+        try? await Task.sleep(for: .milliseconds(LocalCatalog.shared.items.isEmpty ? 400 : 150))
         if Task.isCancelled { return }
-        suggestions = found
-        var items: [CatalogItem] = []
-        var failed = false
-        if case .failure = raw { failed = true }
-        if let translated, translated.lowercased() != query.lowercased() {
-            if let hits = try? await LaMovieAPI.search(translated) { items = hits; failed = false }
-            if Task.isCancelled { return }
-        }
-        if items.isEmpty {
-            var tried = Set([query, translated].compactMap { $0?.lowercased() })
-            for name in found.flatMap(\.allNames) where name.count >= 3 && tried.insert(name.lowercased()).inserted {
-                if let hits = try? await LaMovieAPI.search(name), !hits.isEmpty {
-                    items = hits
-                    fallbackName = name
-                    failed = false
-                    break
-                }
-                if Task.isCancelled { return }
-            }
-        }
-        if Task.isCancelled { return }
-        state = !items.isEmpty ? .results(items) : (failed ? .failed : .empty)
-    }
 
-    /// Traducción al inglés de lo escrito y sugerencias de TMDB para ambas variantes.
-    private static func extras(for query: String) async -> (String?, [TitleSuggestion]) {
-        let translated = await QueryTranslator.shared.english(query)
-        let queries = [query] + [translated].compactMap { $0 }
-        return (translated, await suggestions(for: queries))
-    }
-
-    /// Resultados del catálogo para todas las variantes, sin repetir y con la escrita primero.
-    /// Falla solo si fallan todas.
-    private static func catalogSearch(_ queries: [String]) async throws -> [CatalogItem] {
-        var results: [Result<[CatalogItem], Error>] = []
-        await withTaskGroup(of: (Int, Result<[CatalogItem], Error>).self) { group in
-            for (index, query) in queries.enumerated() {
-                group.addTask { (index, await Result { try await LaMovieAPI.search(query) }) }
-            }
-            var indexed: [(Int, Result<[CatalogItem], Error>)] = []
-            for await entry in group { indexed.append(entry) }
-            results = indexed.sorted { $0.0 < $1.0 }.map(\.1)
+        let outcome = await CatalogSearch.run(query) { hits, related in
+            // Lo local se muestra ya; lo que aporta TMDB se suma cuando llega.
+            self.related = related
+            if !hits.isEmpty { self.state = .results(hits) }
         }
-        if results.allSatisfy({ if case .failure = $0 { true } else { false } }), let first = results.first {
-            _ = try first.get()
-        }
-        var seen = Set<Int>()
-        return results.flatMap { (try? $0.get()) ?? [] }.filter { seen.insert($0.id).inserted }
-    }
-
-    /// Sugerencias de TMDB para todas las variantes, sin repetir y con las de lo escrito primero.
-    private static func suggestions(for queries: [String]) async -> [TitleSuggestion] {
-        var lists: [[TitleSuggestion]] = []
-        await withTaskGroup(of: (Int, [TitleSuggestion]).self) { group in
-            for (index, query) in queries.enumerated() {
-                group.addTask { (index, await TMDBService.shared.suggestions(for: query)) }
-            }
-            var indexed: [(Int, [TitleSuggestion])] = []
-            for await entry in group { indexed.append(entry) }
-            lists = indexed.sorted { $0.0 < $1.0 }.map(\.1)
-        }
-        var seen = Set<Int>()
-        return Array(lists.flatMap { $0 }.filter { seen.insert($0.id * 10 + ($0.kind.isEpisodic ? 2 : 1)).inserted }.prefix(5))
+        guard let outcome else { return }
+        suggestions = outcome.suggestions
+        fallbackName = outcome.fallbackName
+        state = !outcome.items.isEmpty ? .results(outcome.items) : (outcome.failed ? .failed : .empty)
     }
 }
 
@@ -261,14 +208,37 @@ final class RecentlyViewedStore: ObservableObject {
 // MARK: - Palette
 
 /// Estética tipo Apple TV: negro profundo, superficies "glass" y acentos monocromáticos.
-private enum Brand {
+enum Brand {
     static let background = Color(red: 34 / 255, green: 34 / 255, blue: 35 / 255)
     static let card = Color(white: 0.12)
 }
 
-private struct AppBackground: View {
+struct AppBackground: View {
     var body: some View {
         Brand.background.ignoresSafeArea()
+    }
+}
+
+/// Pantalla de arranque a pantalla completa: el logo de la app sobre el loader.
+struct LaunchScreen: View {
+    var body: some View {
+        ZStack {
+            AppBackground()
+
+            VStack(spacing: 44) {
+                Image("AppLogo")
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 170, height: 114)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .accessibilityLabel("LaMovie")
+
+                BrandLoader()
+            }
+        }
+        .ignoresSafeArea()
+        // Tapa todo lo de debajo mientras está visible.
+        .contentShape(Rectangle())
     }
 }
 
@@ -628,9 +598,15 @@ struct HomeView: View {
     @State private var categoryHistory: [SidebarCategory] = []
     @State private var showingSettings = false
     @State private var isSidebarOpen = false
+    /// Pantalla de arranque (logo + loader) mientras llega el catálogo de Inicio.
+    @State private var isLaunching = true
     @StateObject private var router = NavigationRouter()
 
     @StateObject private var model = HomeViewModel()
+    @StateObject private var discover = DiscoverViewModel()
+    @ObservedObject private var localCatalog = LocalCatalog.shared
+    @ObservedObject private var wanted = WantedStore.shared
+    @AppStorage("streamingCountry") private var streamingCountry = Locale.current.region?.identifier ?? "US"
     @StateObject private var moviesModel = CategoryViewModel(kind: .movies)
     @StateObject private var seriesModel = CategoryViewModel(kind: .tvshows)
     @StateObject private var animesModel = CategoryViewModel(kind: .animes)
@@ -660,12 +636,48 @@ struct HomeView: View {
                     .accessibilityHidden(!isSidebarOpen)
 
             }
+
+            if isLaunching {
+                LaunchScreen()
+                    .transition(.opacity)
+                    .zIndex(1)
+            }
         }
         .animation(sidebarAnimation, value: isSidebarOpen)
         .environmentObject(router)
         .environmentObject(recentlyViewed)
         .preferredColorScheme(.dark)
-        .task { await model.load() }
+        .task {
+            let start = ContinuousClock.now
+            await model.load()
+            // Con el catálogo en caché la carga es inmediata: un mínimo evita
+            // que la pantalla de arranque sea solo un parpadeo.
+            try? await Task.sleep(until: start + .milliseconds(900))
+            withAnimation(.easeInOut(duration: 0.6)) { isLaunching = false }
+        }
+        // Cada cambio del texto relanza la búsqueda (y cancela la anterior).
+        .task(id: "\(search.usesAI)|\(query)") { await search.run(query) }
+        // El catálogo local se prepara en segundo plano para que la primera búsqueda sea inmediata;
+        // con él se filtran las filas de TMDB y, una vez al día, se buscan novedades.
+        .task {
+            await LocalCatalog.shared.load()
+            async let update: Void = LocalCatalog.shared.updateIfStale()
+            await discover.load(seeds: discoverSeeds, region: streamingCountry)
+            await update
+            await TitleSpotlightIndex.refresh()
+        }
+        // "Abrir en LaMovie" desde Siri: la ficha, o la búsqueda si el título no está.
+        .onReceive(SiriRouter.shared.$pending) { destination in
+            guard let destination else { return }
+            SiriRouter.shared.pending = nil
+            switch destination {
+            case .item(let item):
+                router.path.append(item)
+            case .search(let text):
+                if activeCategory != .search { navigate(to: .search) }
+                query = text
+            }
+        }
         // Si falta el idioma de traducción, el sistema pide permiso para descargarlo.
         .translationTask(translator.downloadConfig) { session in
             try? await session.prepareTranslation()
@@ -718,14 +730,32 @@ struct HomeView: View {
                 DetailView(item: $0, onOpenSidebar: openSidebar)
             }
             .navigationDestination(for: PlaybackTarget.self) { PlayerLoaderView(target: $0) }
+            .navigationDestination(for: PersonRoute.self) { PersonView(route: $0) }
             #if os(iOS)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    if router.path.isEmpty && !isSidebarOpen {
+                    if router.path.isEmpty && !isSidebarOpen && !isLaunching {
                         Button("Abrir navegación", systemImage: "line.3.horizontal") {
                             openSidebar()
                         }
                         .labelStyle(.iconOnly)
+                    }
+                }
+                // Píldora nativa de iOS 26 (icono + texto) solo en Inicio.
+                ToolbarItem(placement: .topBarTrailing) {
+                    if router.path.isEmpty && !isSidebarOpen && !isLaunching && activeCategory == .home {
+                        // La barra de iOS 26 reduce un `Label` a solo el icono; con un
+                        // HStack conserva también el texto dentro de la píldora.
+                        Button {
+                            navigate(to: .search)
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "magnifyingglass")
+                                Text("Buscar")
+                            }
+                            .fixedSize()
+                        }
+                        .accessibilityLabel("Buscar")
                     }
                 }
             }
@@ -745,7 +775,7 @@ struct HomeView: View {
         #if os(macOS)
         .toolbar {
             ToolbarItem(id: "backCategory") {
-                if isSidebarAvailable && !isSidebarOpen && activeCategory != .home {
+                if isSidebarAvailable && !isSidebarOpen && !isLaunching && activeCategory != .home {
                     Button("Atrás", systemImage: "chevron.backward") {
                         goBackCategory()
                     }
@@ -757,7 +787,7 @@ struct HomeView: View {
             }
 
             ToolbarItem(id: "openSidebar") {
-                if isSidebarAvailable && !isSidebarOpen {
+                if isSidebarAvailable && !isSidebarOpen && !isLaunching {
                     Button("Abrir navegación", systemImage: "sidebar.left") {
                         openSidebar()
                     }
@@ -770,13 +800,15 @@ struct HomeView: View {
             ToolbarSpacer(.flexible)
 
             ToolbarItem(id: "search") {
-                Button("Buscar", systemImage: "magnifyingglass") {
-                    navigate(to: .search)
+                if !isLaunching {
+                    Button("Buscar", systemImage: "magnifyingglass") {
+                        navigate(to: .search)
+                    }
+                    .labelStyle(.iconOnly)
+                    .pointerStyle(.link)
+                    .keyboardShortcut("f", modifiers: .command)
+                    .help("Buscar")
                 }
-                .labelStyle(.iconOnly)
-                .pointerStyle(.link)
-                .keyboardShortcut("f", modifiers: .command)
-                .help("Buscar")
             }
         }
         #endif
@@ -849,9 +881,7 @@ struct HomeView: View {
             if activeCategory == .home {
                 switch model.state {
                 case .loading where model.shelves.isEmpty:
-                    ProgressView("Cargando catálogo…")
-                        .tint(.white)
-                        .foregroundStyle(.white)
+                    BrandLoader()
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 case .failed:
                     VStack(spacing: 14) {
@@ -873,9 +903,11 @@ struct HomeView: View {
             } else if activeCategory == .search {
                 SearchLandingView(
                     query: $query,
+                    usesAI: $search.usesAI,
                     searchState: search.state,
                     suggestions: search.suggestions,
                     fallbackName: search.fallbackName,
+                    related: search.related,
                     recentlyViewed: recentlyViewed,
                     onSelectCategory: { navigate(to: $0) }
                 )
@@ -906,7 +938,23 @@ struct HomeView: View {
                 if !watchProgress.entries.isEmpty {
                     ContinueWatchingShelf(store: watchProgress)
                 }
+                if !wanted.arrived.isEmpty {
+                    ShelfView(shelf: Shelf(id: "arrived", title: "De tu lista, ya disponible", items: wanted.arrived))
+                }
+                if !localCatalog.newSinceLastVisit.isEmpty {
+                    ShelfView(shelf: Shelf(id: "new-since-visit", title: "Añadido desde tu última visita",
+                                           items: localCatalog.newSinceLastVisit))
+                }
+                if let trending = discover.trending {
+                    ShelfView(shelf: trending)
+                }
+                ForEach(discover.becauseYouWatched) { shelf in
+                    ShelfView(shelf: shelf)
+                }
                 ForEach(model.shelves) { shelf in
+                    ShelfView(shelf: shelf)
+                }
+                ForEach(discover.providers) { shelf in
                     ShelfView(shelf: shelf)
                 }
             }
@@ -914,8 +962,19 @@ struct HomeView: View {
             .padding(.bottom, 56)
         }
         .coordinateSpace(name: HeroScroll.space)
-        .refreshable { await model.load() }
+        // Al empezar a ver otro título, "Porque viste…" se rehace con él.
+        .onChange(of: watchProgress.watched.first?.id) {
+            Task { await discover.refreshBecause(seeds: discoverSeeds) }
+        }
+        .refreshable {
+            async let home: Void = model.load()
+            async let tmdb: Void = discover.load(seeds: discoverSeeds, region: streamingCountry, force: true)
+            _ = await (home, tmdb)
+        }
     }
+
+    /// Lo último que se ha reproducido (no basta con abrir la ficha), para "Porque viste…".
+    private var discoverSeeds: [CatalogItem] { watchProgress.watched }
 }
 
 /// Espacio de coordenadas del scroll del inicio, para el parallax del hero.
@@ -1015,16 +1074,34 @@ private extension View {
 /// búsquedas recientes y accesos directos a las categorías (como Apple TV).
 private struct SearchLandingView: View {
     @Binding var query: String
+    @Binding var usesAI: Bool
     let searchState: SearchViewModel.State
     let suggestions: [TitleSuggestion]
     let fallbackName: String?
+    let related: [CatalogItem]
     @ObservedObject var recentlyViewed: RecentlyViewedStore
     let onSelectCategory: (SidebarCategory) -> Void
 
     private var isSearching: Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
-    @ViewBuilder
     var body: some View {
+        content
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Toggle(isOn: $usesAI) {
+                        Label("Buscar con Apple Intelligence", systemImage: "apple.intelligence")
+                    }
+                    .toggleStyle(.button)
+                    .disabled(!AISearch.isAvailable)
+                    .help(AISearch.isAvailable
+                          ? "Describe lo que quieres ver y Apple Intelligence propone títulos del catálogo"
+                          : "Apple Intelligence no está disponible en este dispositivo")
+                }
+            }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         #if os(iOS)
         if UIDevice.current.userInterfaceIdiom == .phone {
             mobileBody
@@ -1044,6 +1121,7 @@ private struct SearchLandingView: View {
                     state: searchState,
                     suggestions: suggestions,
                     fallbackName: fallbackName,
+                    related: related,
                     onPick: { query = $0 }
                 )
             } else {
@@ -1121,6 +1199,7 @@ private struct SearchLandingView: View {
                     state: searchState,
                     suggestions: suggestions,
                     fallbackName: fallbackName,
+                    related: related,
                     onPick: { query = $0 }
                 )
             } else {
@@ -1325,15 +1404,11 @@ private struct StreamingSection: View {
     @Binding var country: String
     @State private var selectedProvider: StreamingProvider?
 
-    private static let spanish = Locale(identifier: "es")
-
     private func name(_ code: String) -> String {
-        Self.spanish.localizedString(forRegionCode: code) ?? code
+        [String: StreamingAvailability].countryName(code)
     }
 
-    private var countries: [String] {
-        streaming.keys.sorted { name($0).localizedCompare(name($1)) == .orderedAscending }
-    }
+    private var countries: [String] { streaming.sortedCountries }
 
     /// El país elegido si tiene datos; si no, el primero disponible.
     private var effectiveCountry: String {
@@ -1341,13 +1416,7 @@ private struct StreamingSection: View {
     }
 
     /// Todas las plataformas del título en cualquier país, sin repetir.
-    private var allProviders: [StreamingProvider] {
-        var seen = Set<Int>()
-        return streaming.values
-            .flatMap { $0.subscription + $0.free }
-            .filter { seen.insert($0.id).inserted }
-            .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
-    }
+    private var allProviders: [StreamingProvider] { streaming.allProviders }
 
     @ViewBuilder
     var body: some View {
@@ -1480,13 +1549,7 @@ private struct StreamingSection: View {
 
     /// Países donde el título está en la plataforma elegida, con el tipo de acceso.
     private func countriesPanel(for provider: StreamingProvider) -> some View {
-        let hits: [(code: String, kinds: [String])] = countries.compactMap { code in
-            guard let entry = streaming[code] else { return nil }
-            var kinds: [String] = []
-            if entry.subscription.contains(where: { $0.id == provider.id }) { kinds.append("Suscripción") }
-            if entry.free.contains(where: { $0.id == provider.id }) { kinds.append("Gratis") }
-            return kinds.isEmpty ? nil : (code, kinds)
-        }
+        let hits = streaming.countries { $0.id == provider.id }
 
         return VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
@@ -1770,6 +1833,7 @@ private struct SearchResultsView: View {
     let state: SearchViewModel.State
     let suggestions: [TitleSuggestion]
     let fallbackName: String?
+    var related: [CatalogItem] = []
     let onPick: (String) -> Void
 
     var body: some View {
@@ -1779,7 +1843,18 @@ private struct SearchResultsView: View {
                 .tint(.white)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .tooShort:
-            message("Escribe al menos 3 caracteres", systemImage: "text.cursor")
+            message("Escribe al menos 2 caracteres", systemImage: "text.cursor")
+        case .empty where !related.isEmpty:
+            // Ningún título se llama así, pero hay tramas que encajan.
+            ScrollView {
+                VStack(alignment: .leading, spacing: 28) {
+                    relatedSection(related)
+                    if !suggestions.isEmpty {
+                        SuggestionsDisclosure(suggestions: suggestions, onPick: onPick)
+                    }
+                }
+                .padding(horizontalPadding)
+            }
         case .empty:
             ScrollView {
                 VStack(alignment: .leading, spacing: 28) {
@@ -1817,6 +1892,11 @@ private struct SearchResultsView: View {
                         FallbackBanner(name: fallbackName)
                     }
                     resultsGrid(items)
+                    let shown = Set(items.map(\.id))
+                    let byPlot = related.filter { !shown.contains($0.id) }
+                    if !byPlot.isEmpty {
+                        relatedSection(byPlot)
+                    }
                     if !suggestions.isEmpty {
                         SuggestionsDisclosure(suggestions: suggestions, onPick: onPick)
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
@@ -1871,6 +1951,15 @@ private struct SearchResultsView: View {
             ForEach(items) { item in
                 PosterCard(item: item)
             }
+        }
+    }
+
+    private func relatedSection(_ items: [CatalogItem]) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Por la trama", systemImage: "text.book.closed")
+                .font(.system(.title3, design: .rounded).weight(.semibold))
+                .foregroundStyle(.white)
+            resultsGrid(items)
         }
     }
 
@@ -1985,6 +2074,14 @@ private struct NameSuggestionsView: View {
 private struct SuggestionCard: View {
     let suggestion: TitleSuggestion
     let onPick: (String) -> Void
+    @EnvironmentObject private var router: NavigationRouter
+    @EnvironmentObject private var recentlyViewed: RecentlyViewedStore
+    @ObservedObject private var catalog = LocalCatalog.shared
+
+    /// El mismo título en lamovie, si está.
+    private var available: CatalogItem? {
+        catalog.match(names: suggestion.allNames, year: suggestion.year, isMovie: !suggestion.kind.isEpisodic)
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -2012,6 +2109,25 @@ private struct SuggestionCard: View {
                             AliasChip(name: name) { onPick(name) }
                         }
                     }
+                }
+
+                if let item = available {
+                    Button {
+                        router.path.append(item)
+                        recentlyViewed.add(item)
+                    } label: {
+                        Label("Ver ficha", systemImage: "play.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .glassEffect(.regular.interactive(), in: Capsule())
+                    .pointerCursor()
+                } else {
+                    WantedButton(title: WantedTitle(suggestion))
                 }
             }
             .frame(width: 210, alignment: .leading)
@@ -2215,11 +2331,32 @@ private struct HorizontalSwipeCatcher: View {
 }
 #endif
 
+/// Póster vertical del hero y la ficha del iPhone, y si ya trae el título rotulado.
+struct PortraitArtwork {
+    /// Marco del hero y la cabecera de la ficha: 9:16, entre el 2:3 de TMDB y el
+    /// póster de Apple TV (≈ 9:19,5), que se recorta un poco por abajo.
+    static let frameAspectRatio: CGFloat = 9.0 / 16.0
+
+    var url: URL?
+    /// Solo el póster de Apple TV lleva el logo encima: es el único que se sabe
+    /// seguro sin texto. Con TMDB (aunque no declare idioma) o LaMovie nunca se pone.
+    var showsLogo: Bool
+
+    /// Orden: Apple TV → TMDB sin idioma → TMDB con idioma → LaMovie →
+    /// fondo horizontal, solo como último recurso.
+    init(tall: URL?, images: TMDBImages, fallback: URL?) {
+        url = tall ?? images.heroPoster ?? images.poster ?? fallback ?? images.backdrop
+        showsLogo = tall != nil
+    }
+}
+
 private struct HeroView: View {
     let item: CatalogItem
     let shouldLoad: Bool
     var isActive = true
     @State private var tmdbBackdropURL: URL?
+    /// En iPhone el logo solo va sobre el póster de Apple TV (ver `PortraitArtwork`).
+    @State private var showsLogo = false
     @State private var qualityTiers: [QualityTier] = []
     @State private var hasWebDL = false
     @AppStorage(ArtworkQuality.storageKey) private var artworkQuality = ArtworkQuality.high
@@ -2244,8 +2381,11 @@ private struct HeroView: View {
                 let shift = max(0, -minY) * 0.5
                 Color(white: 0.05)
                     .overlay {
-                        PosterImage(url: tmdbBackdropURL, category: .backdrop)
+                        PosterImage(url: tmdbBackdropURL, category: centered ? .poster : .backdrop)
                             .aspectRatio(contentMode: .fill)
+                            // Si la imagen es más alta que el marco, las caras suelen ir arriba.
+                            .frame(width: proxy.size.width, height: height + pull, alignment: .top)
+                            .clipped()
                     }
                     .frame(width: proxy.size.width, height: height + pull)
                     .offset(y: shift - pull)
@@ -2270,8 +2410,11 @@ private struct HeroView: View {
             .animation(isActive ? .easeInOut(duration: 0.6).delay(0.3) : .easeInOut(duration: 0.4), value: isActive)
 
             VStack(alignment: centered ? .center : .leading, spacing: 14) {
-                TitleLogo(item: item, textFont: .system(size: centered ? 34 : 42, weight: .bold, design: .rounded),
-                          enabled: shouldLoad, alignment: centered ? .center : .leading)
+                // En macOS el fondo horizontal siempre lleva el logo encima.
+                if showsLogo || !centered {
+                    TitleLogo(item: item, textFont: .system(size: centered ? 34 : 42, weight: .bold, design: .rounded),
+                              enabled: shouldLoad, alignment: centered ? .center : .leading)
+                }
 
                 DetailMetaRow(item: item, tiers: qualityTiers, hasWebDL: hasWebDL, fontSize: centered ? 14 : 17)
 
@@ -2323,10 +2466,9 @@ private struct HeroView: View {
         .frame(maxWidth: .infinity)
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
         #else
-        // Los pósteres verticales de TMDB son normalmente 2:3. El hero adopta
-        // esa proporción para mostrarlos completos, sin el recorte del antiguo 9:16.
+        // Mismo marco para todas las páginas del carrusel (ver `PortraitArtwork`).
         .frame(maxWidth: .infinity)
-        .aspectRatio(2.0 / 3.0, contentMode: .fit)
+        .aspectRatio(PortraitArtwork.frameAspectRatio, contentMode: .fit)
         #endif
         .task(id: HeroTaskKey(shouldLoad: shouldLoad, quality: artworkQuality)) {
             guard shouldLoad else { return }
@@ -2341,14 +2483,9 @@ private struct HeroView: View {
             qualityTiers = resolvedDownloads.qualityTiers
             hasWebDL = resolvedDownloads.contains(where: \.isWebDL)
             #if os(iOS)
-            // Se prioriza una portada vertical sin idioma declarado; si no existe,
-            // cualquier otra portada vertical evita el recorte extremo de un fondo 16:9.
-            // El backdrop horizontal queda únicamente como último recurso.
-            tmdbBackdropURL = resolvedTall
-                ?? resolvedImages.heroPoster
-                ?? resolvedImages.poster
-                ?? item.images.posterURL
-                ?? resolvedImages.backdrop
+            let portrait = PortraitArtwork(tall: resolvedTall, images: resolvedImages, fallback: item.images.posterURL)
+            tmdbBackdropURL = portrait.url
+            showsLogo = portrait.showsLogo
             #else
             tmdbBackdropURL = resolvedImages.backdrop
             #endif
@@ -2387,7 +2524,7 @@ enum HomeLayout {
     #endif
 }
 
-private struct ShelfView: View {
+struct ShelfView: View {
     let shelf: Shelf
 
     var body: some View {
@@ -2410,7 +2547,7 @@ private struct ShelfView: View {
     }
 }
 
-private struct PosterCard: View {
+struct PosterCard: View {
     let item: CatalogItem
     var width: CGFloat? = 190
     var showsMetadata = false
@@ -2568,6 +2705,9 @@ private struct DetailMetaRow: View {
 
 // MARK: - Detail
 
+/// Espacio de coordenadas del scroll de la ficha, para el parallax del póster/backdrop.
+private enum DetailScroll { static let space = "detailScroll" }
+
 struct DetailView: View {
     let item: CatalogItem
     /// No-nil cuando se muestra como tarjeta flotante sobre el catálogo (en vez de
@@ -2576,6 +2716,7 @@ struct DetailView: View {
     /// En iPhone la navegación lateral sigue disponible desde la ficha.
     var onOpenSidebar: (() -> Void)?
 
+    @EnvironmentObject private var router: NavigationRouter
     @State private var seasons: [Int] = []
     @State private var season: Int?
     @State private var episodes: [Episode] = []
@@ -2583,10 +2724,12 @@ struct DetailView: View {
     @State private var downloadTarget: PlaybackTarget?
     @State private var seasonRequest: SeasonDownloadRequest?
     @State private var tmdbDetails: TMDBDetails?
+    /// Recomendaciones de TMDB que están en lamovie.
+    @State private var similar: [CatalogItem] = []
     @State private var tmdbBackdropURL: URL?
     @State private var tmdbPortraitURL: URL?
     /// El póster vertical viene sin título rotulado (Apple TV): se pone el logo encima.
-    @State private var portraitIsTextless = false
+    @State private var showsLogo = false
     @State private var qualityTiers: [QualityTier] = []
     @State private var hasWebDL = false
     @ObservedObject private var watchProgress = WatchProgressStore.shared
@@ -2622,6 +2765,7 @@ struct DetailView: View {
                             .frame(width: proxy.size.width, alignment: .leading)
                     }
                     .frame(width: proxy.size.width)
+                    .coordinateSpace(name: DetailScroll.space)
                     .scrollIndicators(.hidden)
                     // iOS 26 añade por defecto un degradado oscuro en ambos
                     // extremos del scroll. Aquí el póster debe llegar limpio al borde.
@@ -2635,6 +2779,7 @@ struct DetailView: View {
                         .padding(.bottom, 40)
                         .frame(maxWidth: .infinity)
                 }
+                .coordinateSpace(name: DetailScroll.space)
                 .scrollIndicators(.hidden)
                 .ignoresSafeArea(edges: .top)
                 .opacity(ready ? 1 : 0)
@@ -2645,6 +2790,7 @@ struct DetailView: View {
                     .padding(.bottom, 40)
                     .frame(maxWidth: .infinity)
             }
+            .coordinateSpace(name: DetailScroll.space)
             .scrollIndicators(.hidden)
             .ignoresSafeArea(edges: .top)
             .opacity(ready ? 1 : 0)
@@ -2689,6 +2835,8 @@ struct DetailView: View {
         #endif
         .task(id: season) { await loadEpisodes() }
         .task(id: "\(item.id)|\(artworkQuality.rawValue)") { await loadEssentials() }
+        .onAppear { WantedStore.shared.dismiss(itemID: item.id) }
+        .task(id: item.id) { similar = await SimilarTitles.load(for: item) }
         // Red de seguridad: si algo tarda demasiado, se muestra la ficha con lo que haya.
         .task(id: item.id) {
             try? await Task.sleep(for: .seconds(12))
@@ -2713,22 +2861,16 @@ struct DetailView: View {
         async let appleTall = AppleTVArtwork.shared.tallPoster(for: item, quality: artworkQuality)
         let (resolvedDetails, resolvedImages, resolvedTall) = await (details, images, appleTall)
         let backdrop = resolvedImages.backdrop ?? resolvedImages.poster
-        // Primero el póster alto sin texto de Apple TV; si no existe, el de TMDB
-        // (que suele traer el título rotulado, por eso entonces no se pone logo).
-        let portrait = resolvedTall
-            ?? resolvedImages.heroPoster
-            ?? resolvedImages.poster
-            ?? item.images.posterURL
-            ?? resolvedImages.backdrop
+        let portrait = PortraitArtwork(tall: resolvedTall, images: resolvedImages, fallback: item.images.posterURL)
         // Imágenes y logo descargados antes de mostrar la ficha.
         async let warmBackdrop: Void = prefetchImage(backdrop, category: .backdrop)
-        async let warmPortrait: Void = prefetchImage(portrait, category: .poster)
+        async let warmPortrait: Void = prefetchImage(portrait.url, category: .poster)
         async let warmLogo: Void = prefetchImage(resolvedImages.logo, category: .logo)
         _ = await (warmBackdrop, warmPortrait, warmLogo)
         tmdbDetails = resolvedDetails
         tmdbBackdropURL = backdrop
-        tmdbPortraitURL = portrait
-        portraitIsTextless = resolvedTall != nil
+        tmdbPortraitURL = portrait.url
+        showsLogo = portrait.showsLogo
     }
 
     /// Solo para películas: los episodios tienen su propia calidad por enlace.
@@ -2788,6 +2930,8 @@ struct DetailView: View {
                 if let cast = tmdbDetails?.cast, !cast.isEmpty {
                     castSection(cast)
                 }
+
+                similarSection
             }
             .padding(.horizontal, 20)
             .padding(.top, 20)
@@ -2799,23 +2943,31 @@ struct DetailView: View {
 
     private var iPhoneHeader: some View {
         GeometryReader { proxy in
+            // Mismo parallax que el hero: al subir, la imagen se queda atrás
+            // (va a la mitad de velocidad); al tirar hacia abajo, se estira.
+            let minY = proxy.frame(in: .named(DetailScroll.space)).minY
+            let height = proxy.size.height
+            let pull = max(0, minY)
+            let shift = max(0, -minY) * 0.5
             Brand.card
                 .overlay {
                 PosterImage(url: tmdbPortraitURL, category: .poster)
                     .aspectRatio(contentMode: .fill)
-                    // El póster alto de Apple TV sobra por abajo; las caras suelen ir arriba.
-                    .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
+                    // Si la imagen es más alta que el marco, las caras suelen ir arriba.
+                    .frame(width: proxy.size.width, height: height + pull, alignment: .top)
                     .clipped()
                 }
+                .frame(width: proxy.size.width, height: height + pull)
+                .offset(y: shift - pull)
         }
-        .aspectRatio(2.0 / 3.0, contentMode: .fit)
+        .aspectRatio(PortraitArtwork.frameAspectRatio, contentMode: .fit)
         .frame(maxWidth: .infinity)
         // Metadatos y géneros sobre la parte baja del póster, con un
         // degradado corto que funde la imagen con el fondo de la ficha.
         .overlay(alignment: .bottomLeading) {
             VStack(alignment: .leading, spacing: 10) {
                 // El logo solo si el póster no trae ya el título rotulado.
-                if portraitIsTextless {
+                if showsLogo {
                     TitleLogo(item: item, textFont: .system(size: 32, weight: .bold, design: .rounded))
                         .shadow(color: .black.opacity(0.6), radius: 12, y: 4)
                 }
@@ -3080,13 +3232,24 @@ struct DetailView: View {
             }
             .background {
                 // La imagen llena todo el ancho y alto de la cabecera, aunque el contenido la agrande.
+                // Mismo parallax que el hero: al subir, la imagen se queda atrás
+                // (va a la mitad de velocidad); al tirar hacia abajo, se estira.
                 GeometryReader { proxy in
-                    PosterImage(url: tmdbBackdropURL, category: .backdrop)
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: proxy.size.width, height: proxy.size.height)
-                        .clipped()
+                    let minY = proxy.frame(in: .named(DetailScroll.space)).minY
+                    let height = proxy.size.height
+                    let pull = max(0, minY)
+                    let shift = max(0, -minY) * 0.5
+                    Color(white: 0.05)
+                        .overlay {
+                            PosterImage(url: tmdbBackdropURL, category: .backdrop)
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: proxy.size.width, height: height + pull, alignment: .top)
+                                .clipped()
+                        }
+                        .frame(width: proxy.size.width, height: height + pull)
+                        .offset(y: shift - pull)
                 }
-                .background(Color(white: 0.05))
+                .clipped()
             }
 
             VStack(alignment: .leading, spacing: 18) {
@@ -3107,6 +3270,8 @@ struct DetailView: View {
                 if let cast = tmdbDetails?.cast, !cast.isEmpty {
                     castSection(cast)
                 }
+
+                similarSection
             }
             .padding(.horizontal, DetailCard.contentHorizontalPadding)
             .padding(.top, 24)
@@ -3217,6 +3382,27 @@ struct DetailView: View {
     }
 
     @ViewBuilder
+    private var similarSection: some View {
+        if !similar.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Similares")
+                    .font(.system(.title3, design: .rounded).weight(.semibold))
+                    .foregroundStyle(.white)
+                ScrollView(.horizontal, showsIndicators: false) {
+                    LazyHStack(alignment: .top, spacing: HomeLayout.cardSpacing) {
+                        ForEach(similar) { item in
+                            PosterCard(item: item, width: HomeLayout.cardWidth)
+                        }
+                    }
+                    // Margen para que el zoom del hover no se corte.
+                    .padding(.vertical, HomeLayout.shelfVerticalPadding)
+                }
+            }
+            .padding(.top, 6)
+        }
+    }
+
+    @ViewBuilder
     private func castSection(_ cast: [CastMember]) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Reparto")
@@ -3226,6 +3412,9 @@ struct DetailView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(alignment: .top, spacing: 16) {
                     ForEach(cast) { member in
+                        Button {
+                            router.path.append(PersonRoute(id: member.id, name: member.name, profileURL: member.profileURL))
+                        } label: {
                         VStack(spacing: 6) {
                             Circle()
                                 .fill(Brand.card)
@@ -3253,6 +3442,10 @@ struct DetailView: View {
                             }
                         }
                         .frame(width: 84)
+                        .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .pointerCursor()
                     }
                 }
             }

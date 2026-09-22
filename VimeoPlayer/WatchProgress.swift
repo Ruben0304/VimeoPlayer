@@ -46,8 +46,13 @@ final class WatchProgressStore: ObservableObject {
     static let shared = WatchProgressStore()
 
     @Published private(set) var entries: [WatchEntry]
+    /// Títulos reproducidos de verdad (más recientes primero), también los ya terminados,
+    /// que salen de `entries`. Alimenta "Porque viste…".
+    @Published private(set) var watched: [CatalogItem]
 
     private let defaultsKey = "watchProgress"
+    private let watchedKey = "watchedHistory"
+    private let watchedLimit = 10
     private let limit = 30
     /// Menos que esto no cuenta como "empezado"; más que esta fracción se da por terminado.
     private let minimumSeconds = 20.0
@@ -60,6 +65,15 @@ final class WatchProgressStore: ObservableObject {
         } else {
             entries = []
         }
+        if let data = UserDefaults.standard.data(forKey: watchedKey),
+           let decoded = try? JSONDecoder().decode([CatalogItem].self, from: data) {
+            watched = decoded
+        } else {
+            // Primera vez con historial: se parte de lo que ya estaba a medias.
+            let started = (try? JSONDecoder().decode([WatchEntry].self,
+                                                     from: UserDefaults.standard.data(forKey: defaultsKey) ?? Data())) ?? []
+            watched = Array(started.sorted { $0.updatedAt > $1.updatedAt }.map(\.item).prefix(watchedLimit))
+        }
     }
 
     /// Segundo desde el que retomar `postId`, si se dejó a medias.
@@ -71,6 +85,7 @@ final class WatchProgressStore: ObservableObject {
     /// Guarda la posición actual. Al pasar del 95 % el título se da por visto y sale de la lista.
     func record(_ info: WatchInfo, postId: Int, position: Double, duration: Double) {
         guard position.isFinite, duration.isFinite, duration > 0 else { return }
+        if position >= minimumSeconds { noteWatched(info.item) }
         if position / duration >= finishedFraction {
             remove(itemID: info.item.id)
             return
@@ -85,6 +100,16 @@ final class WatchProgressStore: ObservableObject {
         entries.insert(entry, at: 0)
         if entries.count > limit { entries.removeLast(entries.count - limit) }
         persist()
+    }
+
+    /// Sube el título al frente del historial (solo escribe a disco si cambia algo).
+    private func noteWatched(_ item: CatalogItem) {
+        guard watched.first?.id != item.id else { return }
+        watched.removeAll { $0.id == item.id }
+        watched.insert(item, at: 0)
+        if watched.count > watchedLimit { watched.removeLast(watched.count - watchedLimit) }
+        guard let data = try? JSONEncoder().encode(watched) else { return }
+        UserDefaults.standard.set(data, forKey: watchedKey)
     }
 
     func remove(itemID: Int) {

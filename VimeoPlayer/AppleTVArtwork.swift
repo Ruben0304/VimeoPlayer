@@ -6,7 +6,15 @@ import Foundation
 actor AppleTVArtwork {
     static let shared = AppleTVArtwork()
 
-    private var cache: [String: URL?] = [:]
+    /// Plantilla de la imagen alta (`{w}`/`{h}`/`{f}`) y su tamaño original.
+    /// No depende de la calidad elegida: cambiarla no repite la búsqueda.
+    private struct TallTemplate { let url: String; let width: Double; let height: Double }
+
+    /// Resultados definitivos (encontrado o no existe). Los fallos de red no se guardan.
+    private var cache: [String: TallTemplate?] = [:]
+    /// Búsquedas en curso, para que el hero y la ficha no pidan lo mismo a la vez.
+    private var inFlight: [String: Task<FetchOutcome<TallTemplate>, Never>] = [:]
+
     private let base = "https://uts-api.itunes.apple.com/uts/v3"
 
     /// Parámetros de la web de Apple TV. `pfm=appletv` da el catálogo completo;
@@ -17,23 +25,77 @@ actor AppleTVArtwork {
         Storefront(sf: "143454", locale: "es-ES"),
     ]
 
-    /// Póster vertical sin título rotulado, o `nil` si Apple TV no tiene el título.
+    /// Póster vertical sin título rotulado, o `nil` si Apple TV no tiene el título
+    /// (o no se pudo consultar; en ese caso se reintenta en la próxima llamada).
     func tallPoster(for item: CatalogItem, quality: ArtworkQuality) async -> URL? {
-        let key = "\(item.kind.rawValue)|\(item.id)|\(quality.rawValue)"
-        if let cached = cache[key] { return cached }
+        let key = "\(item.kind.rawValue)|\(item.id)"
+        let template: TallTemplate?
+        if let cached = cache[key] {
+            template = cached
+        } else {
+            let task = inFlight[key] ?? Task { await self.lookup(item) }
+            inFlight[key] = task
+            let outcome = await task.value
+            inFlight[key] = nil
+            switch outcome {
+            case .found(let found):
+                cache[key] = .some(found)
+                template = found
+            case .notFound:
+                cache[key] = .some(nil)
+                template = nil
+            case .failed:
+                template = nil
+            }
+        }
+        return template.flatMap { url(from: $0, quality: quality) }
+    }
 
-        var result: URL?
-        search: for storefront in storefronts {
-            for title in Set([item.originalTitle, item.displayTitle].compactMap { $0 }) {
-                if let match = await match(title: title, item: item, storefront: storefront),
-                   let url = await tallImage(of: match, storefront: storefront, quality: quality) {
-                    result = url
-                    break search
+    // MARK: - Búsqueda
+
+    /// Primero con los títulos de LaMovie; si no aparece, con el título en inglés de TMDB,
+    /// que es como Apple TV cataloga mucho contenido extranjero.
+    private func lookup(_ item: CatalogItem) async -> FetchOutcome<TallTemplate> {
+        let titles = titles(for: item)
+        let first = await lookup(item, titles: titles)
+        guard case .notFound = first,
+              let english = await TMDBService.shared.englishTitle(for: item),
+              !titles.contains(where: { normalized($0) == normalized(english) }) else { return first }
+        return await lookup(item, titles: [english])
+    }
+
+    /// Los dos storefronts se consultan en paralelo; gana el de EE. UU. si ambos lo tienen.
+    private func lookup(_ item: CatalogItem, titles: [String]) async -> FetchOutcome<TallTemplate> {
+        async let us = lookup(item, titles: titles, storefront: storefronts[0])
+        async let es = lookup(item, titles: titles, storefront: storefronts[1])
+        let outcomes = await [us, es]
+        if let found = outcomes.lazy.compactMap(\.value).first { return .found(found) }
+        return outcomes.contains { if case .failed = $0 { true } else { false } } ? .failed : .notFound
+    }
+
+    private func lookup(_ item: CatalogItem, titles: [String], storefront: Storefront) async -> FetchOutcome<TallTemplate> {
+        var failed = false
+        for title in titles {
+            switch await match(title: title, item: item, storefront: storefront) {
+            case .failed: failed = true
+            case .notFound: continue
+            case .found(let match):
+                switch await tallTemplate(of: match, storefront: storefront) {
+                case .found(let template): return .found(template)
+                case .failed: failed = true
+                case .notFound: continue
                 }
             }
         }
-        cache[key] = result
-        return result
+        return failed ? .failed : .notFound
+    }
+
+    /// Título original primero y luego el mostrado, sin repetir.
+    private func titles(for item: CatalogItem) -> [String] {
+        var seen = Set<String>()
+        return [item.originalTitle, item.displayTitle]
+            .compactMap { $0 }
+            .filter { !$0.isEmpty && seen.insert(normalized($0)).inserted }
     }
 
     // MARK: - API
@@ -63,36 +125,54 @@ actor AppleTVArtwork {
         let data: DataBody?
     }
 
-    private func match(title: String, item: CatalogItem, storefront: Storefront) async -> SearchResponse.Item? {
-        guard let response: SearchResponse = await get("search", storefront: storefront, extra: ["searchTerm": title]) else { return nil }
+    private func match(title: String, item: CatalogItem, storefront: Storefront) async -> FetchOutcome<SearchResponse.Item> {
+        let response: SearchResponse
+        switch await get("search", storefront: storefront, extra: ["searchTerm": title], as: SearchResponse.self) {
+        case .found(let decoded): response = decoded
+        case .notFound: return .notFound
+        case .failed: return .failed
+        }
         let wantedType = item.kind.isEpisodic ? "Show" : "Movie"
         let wantedTitle = normalized(title)
-        let wantedYear = item.year.flatMap(Int.init)
         let candidates = (response.data?.canvas?.shelves ?? [])
             .flatMap { $0.items ?? [] }
             .filter { $0.type == wantedType && normalized($0.title ?? "") == wantedTitle }
-        // Mismo título y tipo; si hay año, se exige que coincida (±1 por estrenos a fin de año).
-        return candidates.first { candidate in
-            guard let wantedYear else { return true }
-            guard let year = candidate.releaseYear else { return false }
-            return abs(year - wantedYear) <= 1
+
+        guard let wantedYear = item.year.flatMap(Int.init) else {
+            return candidates.first.map { .found($0) } ?? .notFound
+        }
+        // Mismo título y tipo; de los que tienen año, el más cercano. Se admiten ±2 años:
+        // el estreno de festival o de otro país a menudo difiere del de EE. UU.
+        let closest = candidates
+            .compactMap { candidate in candidate.releaseYear.map { (candidate, abs($0 - wantedYear)) } }
+            .min { $0.1 < $1.1 }
+        if let closest, closest.1 <= 2 { return .found(closest.0) }
+        // Sin fecha solo se acepta si no hay ningún otro candidato con el que confundirlo.
+        if candidates.count == 1, candidates[0].releaseYear == nil { return .found(candidates[0]) }
+        return .notFound
+    }
+
+    private func tallTemplate(of item: SearchResponse.Item, storefront: Storefront) async -> FetchOutcome<TallTemplate> {
+        let path = (item.type == "Show" ? "shows/" : "movies/") + item.id
+        switch await get(path, storefront: storefront, as: ContentResponse.self) {
+        case .found(let response):
+            guard let image = response.data?.content?.images?["contentImageTall"] else { return .notFound }
+            return .found(TallTemplate(url: image.url, width: image.width ?? 1680, height: image.height ?? 3636))
+        case .notFound: return .notFound
+        case .failed: return .failed
         }
     }
 
-    private func tallImage(of item: SearchResponse.Item, storefront: Storefront, quality: ArtworkQuality) async -> URL? {
-        let path = (item.type == "Show" ? "shows/" : "movies/") + item.id
-        guard let response: ContentResponse = await get(path, storefront: storefront),
-              let image = response.data?.content?.images?["contentImageTall"] else { return nil }
-        let width = quality.appleTallWidth
-        let ratio = (image.height ?? 3636) / (image.width ?? 1680)
-        let url = image.url
+    private func url(from template: TallTemplate, quality: ArtworkQuality) -> URL? {
+        let width = min(quality.appleTallWidth, Int(template.width))
+        let height = Int((Double(width) * template.height / template.width).rounded())
+        return URL(string: template.url
             .replacingOccurrences(of: "{w}", with: String(width))
-            .replacingOccurrences(of: "{h}", with: String(Int((Double(width) * ratio).rounded())))
-            .replacingOccurrences(of: "{f}", with: "jpg")
-        return URL(string: url)
+            .replacingOccurrences(of: "{h}", with: String(height))
+            .replacingOccurrences(of: "{f}", with: "jpg"))
     }
 
-    private func get<T: Decodable>(_ path: String, storefront: Storefront, extra: [String: String] = [:]) async -> T? {
+    private func get<T: Decodable>(_ path: String, storefront: Storefront, extra: [String: String] = [:], as type: T.Type) async -> FetchOutcome<T> {
         var components = URLComponents(string: "\(base)/\(path)")!
         let params = [
             "caller": "web", "pfm": "appletv", "v": "96",
@@ -101,19 +181,20 @@ actor AppleTVArtwork {
             "utsk": "6e3013c6d6fae3c2::::::235656c069bb0efb",
         ].merging(extra) { $1 }
         components.queryItems = params.map { URLQueryItem(name: $0.key, value: $0.value) }
-        guard let url = components.url,
-              let (data, response) = try? await URLSession.shared.data(from: url),
-              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { return nil }
-        return try? JSONDecoder().decode(T.self, from: data)
+        guard let url = components.url else { return .notFound }
+        // Tiempo corto: la ficha espera a este póster antes de mostrarse.
+        return await URLSession.shared.fetchJSON(type, from: url, timeout: 6)
     }
 
-    /// Compara títulos sin mayúsculas, acentos ni signos ("Kenan & Kel" == "kenan and kel").
+    /// Compara títulos sin mayúsculas, acentos, signos ni conjunciones
+    /// ("Kenan & Kel" == "kenan and kel", "Tom y Jerry" == "Tom & Jerry").
     private func normalized(_ title: String) -> String {
         title
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: nil)
-            .replacingOccurrences(of: "&", with: "and")
             .replacingOccurrences(of: #"\s*\(\d{4}\)$"#, with: "", options: .regularExpression)
-            .filter { $0.isLetter || $0.isNumber }
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty && $0 != "and" && $0 != "y" }
+            .joined()
     }
 }
 

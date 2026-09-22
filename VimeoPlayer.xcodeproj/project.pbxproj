@@ -1,62 +1,50 @@
 // !$*UTF8*$!
 {
 	archiveVersion = 1;
-	classes = {};
+	classes = {
+	};
 	objectVersion = 77;
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A100000000000000000000F4 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000F3 /* AppIcon.icon */; };
-		A100000000000000000000F6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000F5 /* Assets.xcassets */; };
-		A100000000000000000000A3 /* VLCKitSPM in Frameworks */ = {isa = PBXBuildFile; platformFilter = macos; productRef = A100000000000000000000A2 /* VLCKitSPM */; };
-		A100000000000000000000D2 /* RAR5Decoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000D1 /* RAR5Decoder.swift */; };
-		A1000000000000000000009C /* RARArchive.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000008C /* RARArchive.swift */; };
-		A1000000000000000000009D /* RARStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000008D /* RARStream.swift */; };
-		A1000000000000000000009E /* MKVPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000008E /* MKVPlayer.swift */; };
-		A100000000000000000000C1 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000C2 /* Config.swift */; };
-		A1000000000000000000009B /* TMDB.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000008B /* TMDB.swift */; };
-		A1000000000000000000009A /* StreamProxy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000008A /* StreamProxy.swift */; };
-		A10000000000000000000099 /* LocalHTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000089 /* LocalHTTPServer.swift */; };
-		A10000000000000000000098 /* SegmentDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000088 /* SegmentDownloader.swift */; };
-		A10000000000000000000097 /* HLS.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000087 /* HLS.swift */; };
-		A10000000000000000000096 /* SeasonDownload.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000086 /* SeasonDownload.swift */; };
-		A10000000000000000000095 /* Downloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000085 /* Downloads.swift */; };
-		A100000000000000000000E2 /* WatchProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000E1 /* WatchProgress.swift */; };
-		A10000000000000000000094 /* Glass.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000084 /* Glass.swift */; };
-		A100000000000000000000F9 /* AppleTVArtwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000F8 /* AppleTVArtwork.swift */; };
-		A100000000000000000000F1 /* StreamingSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000F0 /* StreamingSidebar.swift */; };
-		A10000000000000000000093 /* Playback.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000083 /* Playback.swift */; };
-		A10000000000000000000092 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000082 /* HomeView.swift */; };
-		A10000000000000000000091 /* Catalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000081 /* Catalog.swift */; };
 		A10000000000000000000011 /* VimeoPlayerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000001 /* VimeoPlayerApp.swift */; };
 		A10000000000000000000012 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000002 /* ContentView.swift */; };
 		A10000000000000000000013 /* VideoWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000003 /* VideoWebView.swift */; };
 		A10000000000000000000014 /* NativePlayerModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000006 /* NativePlayerModel.swift */; };
 		A10000000000000000000015 /* NativePlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000007 /* NativePlayerView.swift */; };
+		A10000000000000000000091 /* Catalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000081 /* Catalog.swift */; };
+		A10000000000000000000092 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000082 /* HomeView.swift */; };
+		A10000000000000000000093 /* Playback.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000083 /* Playback.swift */; };
+		A10000000000000000000094 /* Glass.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000084 /* Glass.swift */; };
+		A10000000000000000000095 /* Downloads.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000085 /* Downloads.swift */; };
+		A10000000000000000000096 /* SeasonDownload.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000086 /* SeasonDownload.swift */; };
+		A10000000000000000000097 /* HLS.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000087 /* HLS.swift */; };
+		A10000000000000000000098 /* SegmentDownloader.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000088 /* SegmentDownloader.swift */; };
+		A10000000000000000000099 /* LocalHTTPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000089 /* LocalHTTPServer.swift */; };
+		A1000000000000000000009A /* StreamProxy.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000008A /* StreamProxy.swift */; };
+		A1000000000000000000009B /* TMDB.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000008B /* TMDB.swift */; };
+		A1000000000000000000009C /* RARArchive.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000008C /* RARArchive.swift */; };
+		A1000000000000000000009D /* RARStream.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000008D /* RARStream.swift */; };
+		A1000000000000000000009E /* MKVPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000000000000000000008E /* MKVPlayer.swift */; };
+		A100000000000000000000A3 /* VLCKitSPM in Frameworks */ = {isa = PBXBuildFile; productRef = A100000000000000000000A2 /* VLCKitSPM */; };
+		A100000000000000000000C1 /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000C2 /* Config.swift */; };
+		A100000000000000000000D2 /* RAR5Decoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000D1 /* RAR5Decoder.swift */; };
+		A100000000000000000000E2 /* WatchProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000E1 /* WatchProgress.swift */; };
+		A100000000000000000000F1 /* StreamingSidebar.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000F0 /* StreamingSidebar.swift */; };
+		A100000000000000000000F4 /* AppIcon.icon in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000F3 /* AppIcon.icon */; };
+		A100000000000000000000F6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000F5 /* Assets.xcassets */; };
+		A100000000000000000000F9 /* AppleTVArtwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100000000000000000000F8 /* AppleTVArtwork.swift */; };
+		A10000000000000000000102 /* LocalCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000101 /* LocalCatalog.swift */; };
+		A10000000000000000000106 /* Discover.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000105 /* Discover.swift */; };
+		A1000000000000000000020A /* AISearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000209 /* AISearch.swift */; };
+		A10000000000000000000202 /* CatalogSearch.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000201 /* CatalogSearch.swift */; };
+		A10000000000000000000204 /* SiriEntities.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000203 /* SiriEntities.swift */; };
+		A10000000000000000000206 /* SiriIntents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000205 /* SiriIntents.swift */; };
+		A10000000000000000000208 /* AppShortcuts.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000207 /* AppShortcuts.xcstrings */; };
+		A10000000000000000000104 /* LaMovieCatalog.deflate in Resources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000103 /* LaMovieCatalog.deflate */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		A100000000000000000000F3 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
-		A100000000000000000000F5 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		A100000000000000000000D1 /* RAR5Decoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RAR5Decoder.swift; sourceTree = "<group>"; };
-		A1000000000000000000008C /* RARArchive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RARArchive.swift; sourceTree = "<group>"; };
-		A1000000000000000000008D /* RARStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RARStream.swift; sourceTree = "<group>"; };
-		A1000000000000000000008E /* MKVPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MKVPlayer.swift; sourceTree = "<group>"; };
-		A100000000000000000000C2 /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
-		A1000000000000000000008B /* TMDB.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TMDB.swift; sourceTree = "<group>"; };
-		A1000000000000000000008A /* StreamProxy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamProxy.swift; sourceTree = "<group>"; };
-		A10000000000000000000089 /* LocalHTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHTTPServer.swift; sourceTree = "<group>"; };
-		A10000000000000000000088 /* SegmentDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentDownloader.swift; sourceTree = "<group>"; };
-		A10000000000000000000087 /* HLS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLS.swift; sourceTree = "<group>"; };
-		A10000000000000000000086 /* SeasonDownload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeasonDownload.swift; sourceTree = "<group>"; };
-		A10000000000000000000085 /* Downloads.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Downloads.swift; sourceTree = "<group>"; };
-		A100000000000000000000E1 /* WatchProgress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchProgress.swift; sourceTree = "<group>"; };
-		A10000000000000000000084 /* Glass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Glass.swift; sourceTree = "<group>"; };
-		A100000000000000000000F8 /* AppleTVArtwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleTVArtwork.swift; sourceTree = "<group>"; };
-		A100000000000000000000F0 /* StreamingSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingSidebar.swift; sourceTree = "<group>"; };
-		A10000000000000000000083 /* Playback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Playback.swift; sourceTree = "<group>"; };
-		A10000000000000000000082 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
-		A10000000000000000000081 /* Catalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Catalog.swift; sourceTree = "<group>"; };
 		A10000000000000000000001 /* VimeoPlayerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VimeoPlayerApp.swift; sourceTree = "<group>"; };
 		A10000000000000000000002 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A10000000000000000000003 /* VideoWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VideoWebView.swift; sourceTree = "<group>"; };
@@ -64,49 +52,352 @@
 		A10000000000000000000005 /* LaMovie.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LaMovie.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000006 /* NativePlayerModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlayerModel.swift; sourceTree = "<group>"; };
 		A10000000000000000000007 /* NativePlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePlayerView.swift; sourceTree = "<group>"; };
+		A10000000000000000000081 /* Catalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Catalog.swift; sourceTree = "<group>"; };
+		A10000000000000000000082 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		A10000000000000000000083 /* Playback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Playback.swift; sourceTree = "<group>"; };
+		A10000000000000000000084 /* Glass.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Glass.swift; sourceTree = "<group>"; };
+		A10000000000000000000085 /* Downloads.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Downloads.swift; sourceTree = "<group>"; };
+		A10000000000000000000086 /* SeasonDownload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeasonDownload.swift; sourceTree = "<group>"; };
+		A10000000000000000000087 /* HLS.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HLS.swift; sourceTree = "<group>"; };
+		A10000000000000000000088 /* SegmentDownloader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentDownloader.swift; sourceTree = "<group>"; };
+		A10000000000000000000089 /* LocalHTTPServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalHTTPServer.swift; sourceTree = "<group>"; };
+		A1000000000000000000008A /* StreamProxy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamProxy.swift; sourceTree = "<group>"; };
+		A1000000000000000000008B /* TMDB.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TMDB.swift; sourceTree = "<group>"; };
+		A1000000000000000000008C /* RARArchive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RARArchive.swift; sourceTree = "<group>"; };
+		A1000000000000000000008D /* RARStream.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RARStream.swift; sourceTree = "<group>"; };
+		A1000000000000000000008E /* MKVPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MKVPlayer.swift; sourceTree = "<group>"; };
+		A100000000000000000000C2 /* Config.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Config.swift; sourceTree = "<group>"; };
+		A100000000000000000000D1 /* RAR5Decoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RAR5Decoder.swift; sourceTree = "<group>"; };
+		A100000000000000000000E1 /* WatchProgress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WatchProgress.swift; sourceTree = "<group>"; };
+		A100000000000000000000F0 /* StreamingSidebar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamingSidebar.swift; sourceTree = "<group>"; };
+		A100000000000000000000F3 /* AppIcon.icon */ = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = "<group>"; };
+		A100000000000000000000F5 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A100000000000000000000F8 /* AppleTVArtwork.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppleTVArtwork.swift; sourceTree = "<group>"; };
+		A10000000000000000000101 /* LocalCatalog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalCatalog.swift; sourceTree = "<group>"; };
+		A10000000000000000000105 /* Discover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Discover.swift; sourceTree = "<group>"; };
+		A10000000000000000000209 /* AISearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AISearch.swift; sourceTree = "<group>"; };
+		A10000000000000000000201 /* CatalogSearch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CatalogSearch.swift; sourceTree = "<group>"; };
+		A10000000000000000000203 /* SiriEntities.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiriEntities.swift; sourceTree = "<group>"; };
+		A10000000000000000000205 /* SiriIntents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiriIntents.swift; sourceTree = "<group>"; };
+		A10000000000000000000207 /* AppShortcuts.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = AppShortcuts.xcstrings; sourceTree = "<group>"; };
+		A10000000000000000000103 /* LaMovieCatalog.deflate */ = {isa = PBXFileReference; lastKnownFileType = file; path = LaMovieCatalog.deflate; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		A10000000000000000000021 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (A100000000000000000000A3 /* VLCKitSPM in Frameworks */, ); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000021 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A100000000000000000000A3 /* VLCKitSPM in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		A10000000000000000000031 = {isa = PBXGroup; children = (A10000000000000000000032 /* VimeoPlayer */, A10000000000000000000033 /* Products */); sourceTree = "<group>"; };
-		A10000000000000000000032 /* VimeoPlayer */ = {isa = PBXGroup; children = (A100000000000000000000F3 /* AppIcon.icon */, A100000000000000000000F5 /* Assets.xcassets */, A100000000000000000000E1 /* WatchProgress.swift */, A100000000000000000000D1 /* RAR5Decoder.swift */, A1000000000000000000008C /* RARArchive.swift */, A1000000000000000000008D /* RARStream.swift */, A1000000000000000000008E /* MKVPlayer.swift */, A100000000000000000000C2 /* Config.swift */, A10000000000000000000001 /* VimeoPlayerApp.swift */, A10000000000000000000002 /* ContentView.swift */, A1000000000000000000008B /* TMDB.swift */, A100000000000000000000F8 /* AppleTVArtwork.swift */, A1000000000000000000008A /* StreamProxy.swift */, A10000000000000000000089 /* LocalHTTPServer.swift */, A10000000000000000000088 /* SegmentDownloader.swift */, A10000000000000000000087 /* HLS.swift */, A10000000000000000000086 /* SeasonDownload.swift */, A10000000000000000000085 /* Downloads.swift */, A10000000000000000000084 /* Glass.swift */, A100000000000000000000F0 /* StreamingSidebar.swift */, A10000000000000000000083 /* Playback.swift */, A10000000000000000000082 /* HomeView.swift */, A10000000000000000000081 /* Catalog.swift */, A10000000000000000000003 /* VideoWebView.swift */, A10000000000000000000006 /* NativePlayerModel.swift */, A10000000000000000000007 /* NativePlayerView.swift */, A10000000000000000000004 /* VimeoPlayer.entitlements */); path = VimeoPlayer; sourceTree = "<group>"; };
-		A10000000000000000000033 /* Products */ = {isa = PBXGroup; children = (A10000000000000000000005 /* LaMovie.app */); name = Products; sourceTree = "<group>"; };
+		A10000000000000000000031 = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000032 /* VimeoPlayer */,
+				A10000000000000000000033 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A10000000000000000000032 /* VimeoPlayer */ = {
+			isa = PBXGroup;
+			children = (
+				A100000000000000000000F3 /* AppIcon.icon */,
+				A100000000000000000000F5 /* Assets.xcassets */,
+				A100000000000000000000E1 /* WatchProgress.swift */,
+				A100000000000000000000D1 /* RAR5Decoder.swift */,
+				A1000000000000000000008C /* RARArchive.swift */,
+				A1000000000000000000008D /* RARStream.swift */,
+				A1000000000000000000008E /* MKVPlayer.swift */,
+				A100000000000000000000C2 /* Config.swift */,
+				A10000000000000000000001 /* VimeoPlayerApp.swift */,
+				A10000000000000000000002 /* ContentView.swift */,
+				A1000000000000000000008B /* TMDB.swift */,
+				A100000000000000000000F8 /* AppleTVArtwork.swift */,
+				A10000000000000000000101 /* LocalCatalog.swift */,
+				A10000000000000000000105 /* Discover.swift */,
+				A10000000000000000000103 /* LaMovieCatalog.deflate */,
+				A10000000000000000000201 /* CatalogSearch.swift */,
+				A10000000000000000000209 /* AISearch.swift */,
+				A10000000000000000000203 /* SiriEntities.swift */,
+				A10000000000000000000205 /* SiriIntents.swift */,
+				A10000000000000000000207 /* AppShortcuts.xcstrings */,
+				A1000000000000000000008A /* StreamProxy.swift */,
+				A10000000000000000000089 /* LocalHTTPServer.swift */,
+				A10000000000000000000088 /* SegmentDownloader.swift */,
+				A10000000000000000000087 /* HLS.swift */,
+				A10000000000000000000086 /* SeasonDownload.swift */,
+				A10000000000000000000085 /* Downloads.swift */,
+				A10000000000000000000084 /* Glass.swift */,
+				A100000000000000000000F0 /* StreamingSidebar.swift */,
+				A10000000000000000000083 /* Playback.swift */,
+				A10000000000000000000082 /* HomeView.swift */,
+				A10000000000000000000081 /* Catalog.swift */,
+				A10000000000000000000003 /* VideoWebView.swift */,
+				A10000000000000000000006 /* NativePlayerModel.swift */,
+				A10000000000000000000007 /* NativePlayerView.swift */,
+				A10000000000000000000004 /* VimeoPlayer.entitlements */,
+			);
+			path = VimeoPlayer;
+			sourceTree = "<group>";
+		};
+		A10000000000000000000033 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A10000000000000000000005 /* LaMovie.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		A10000000000000000000041 /* VimeoPlayer */ = {isa = PBXNativeTarget; buildConfigurationList = A10000000000000000000051 /* Build configuration list for PBXNativeTarget "VimeoPlayer" */; buildPhases = (A10000000000000000000020 /* Sources */, A10000000000000000000021 /* Frameworks */, A10000000000000000000022 /* Resources */, A100000000000000000000B1 /* Inject TMDB key */); buildRules = (); dependencies = (); name = VimeoPlayer; packageProductDependencies = (A100000000000000000000A2 /* VLCKitSPM */, ); productName = VimeoPlayer; productReference = A10000000000000000000005 /* LaMovie.app */; productType = "com.apple.product-type.application"; };
+		A10000000000000000000041 /* VimeoPlayer */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A10000000000000000000051 /* Build configuration list for PBXNativeTarget "VimeoPlayer" */;
+			buildPhases = (
+				A10000000000000000000020 /* Sources */,
+				A10000000000000000000021 /* Frameworks */,
+				A10000000000000000000022 /* Resources */,
+				A100000000000000000000B1 /* Inject TMDB key */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = VimeoPlayer;
+			packageProductDependencies = (
+				A100000000000000000000A2 /* VLCKitSPM */,
+			);
+			productName = VimeoPlayer;
+			productReference = A10000000000000000000005 /* LaMovie.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		A10000000000000000000061 /* Project object */ = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = 1; LastUpgradeCheck = 2700; TargetAttributes = {A10000000000000000000041 = {CreatedOnToolsVersion = 27.0;};};}; buildConfigurationList = A10000000000000000000052 /* Build configuration list for PBXProject "VimeoPlayer" */; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); packageReferences = (A100000000000000000000A1 /* XCRemoteSwiftPackageReference "vlckit-spm" */, ); mainGroup = A10000000000000000000031; preferredProjectObjectVersion = 77; productRefGroup = A10000000000000000000033 /* Products */; projectDirPath = ""; projectRoot = ""; targets = (A10000000000000000000041 /* VimeoPlayer */); };
+		A10000000000000000000061 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					A10000000000000000000041 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+				};
+			};
+			buildConfigurationList = A10000000000000000000052 /* Build configuration list for PBXProject "VimeoPlayer" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				es,
+				Base,
+			);
+			mainGroup = A10000000000000000000031;
+			packageReferences = (
+				A100000000000000000000A1 /* XCRemoteSwiftPackageReference "vlckit-spm" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = A10000000000000000000033 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A10000000000000000000041 /* VimeoPlayer */,
+			);
+		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		A10000000000000000000022 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (A100000000000000000000F4 /* AppIcon.icon in Resources */, A100000000000000000000F6 /* Assets.xcassets in Resources */, ); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000022 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A100000000000000000000F4 /* AppIcon.icon in Resources */,
+				A100000000000000000000F6 /* Assets.xcassets in Resources */,
+				A10000000000000000000104 /* LaMovieCatalog.deflate in Resources */,
+				A10000000000000000000208 /* AppShortcuts.xcstrings in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		A100000000000000000000B1 /* Inject TMDB key */ = {isa = PBXShellScriptBuildPhase; buildActionMask = 2147483647; files = (); inputPaths = ("$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)", ); name = "Inject TMDB key"; outputPaths = ("$(DERIVED_FILE_DIR)/tmdb-key.stamp", ); runOnlyForDeploymentPostprocessing = 0; shellPath = /bin/sh; shellScript = "set -e\nENV_FILE=\"${SRCROOT}/.env\"\nKEY=\"\"\nif [ -f \"$ENV_FILE\" ]; then\n  KEY=$(grep -E '^TMDB_API_KEY=' \"$ENV_FILE\" | head -1 | cut -d= -f2- | tr -d '\\r\"'\"'\"' ')\nfi\nKEY=\"${KEY:-$TMDB_API_KEY}\"\nPLIST=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\n[ -n \"$KEY\" ] || { echo \"warning: TMDB_API_KEY no encontrada en .env\"; mkdir -p \"${DERIVED_FILE_DIR}\"; touch \"${DERIVED_FILE_DIR}/tmdb-key.stamp\"; exit 0; }\n/usr/libexec/PlistBuddy -c \"Delete :TMDB_API_KEY\" \"$PLIST\" 2>/dev/null || true\n/usr/libexec/PlistBuddy -c \"Add :TMDB_API_KEY string $KEY\" \"$PLIST\"\ntouch \"${DERIVED_FILE_DIR}/tmdb-key.stamp\"\n"; };
+		A100000000000000000000B1 /* Inject TMDB key */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)",
+			);
+			name = "Inject TMDB key";
+			outputPaths = (
+				"$(DERIVED_FILE_DIR)/tmdb-key.stamp",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nENV_FILE=\"${SRCROOT}/.env\"\nKEY=\"\"\nif [ -f \"$ENV_FILE\" ]; then\n  KEY=$(grep -E '^TMDB_API_KEY=' \"$ENV_FILE\" | head -1 | cut -d= -f2- | tr -d '\\r\"'\"'\"' ')\nfi\nKEY=\"${KEY:-$TMDB_API_KEY}\"\nPLIST=\"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}\"\n[ -n \"$KEY\" ] || { echo \"warning: TMDB_API_KEY no encontrada en .env\"; mkdir -p \"${DERIVED_FILE_DIR}\"; touch \"${DERIVED_FILE_DIR}/tmdb-key.stamp\"; exit 0; }\n/usr/libexec/PlistBuddy -c \"Delete :TMDB_API_KEY\" \"$PLIST\" 2>/dev/null || true\n/usr/libexec/PlistBuddy -c \"Add :TMDB_API_KEY string $KEY\" \"$PLIST\"\ntouch \"${DERIVED_FILE_DIR}/tmdb-key.stamp\"\n";
+		};
 /* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		A10000000000000000000020 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A100000000000000000000E2 /* WatchProgress.swift in Sources */, A100000000000000000000D2 /* RAR5Decoder.swift in Sources */, A1000000000000000000009C /* RARArchive.swift in Sources */, A1000000000000000000009D /* RARStream.swift in Sources */, A1000000000000000000009E /* MKVPlayer.swift in Sources */, A100000000000000000000C1 /* Config.swift in Sources */, A10000000000000000000011 /* VimeoPlayerApp.swift in Sources */, A10000000000000000000012 /* ContentView.swift in Sources */, A1000000000000000000009B /* TMDB.swift in Sources */, A100000000000000000000F9 /* AppleTVArtwork.swift in Sources */, A1000000000000000000009A /* StreamProxy.swift in Sources */, A10000000000000000000099 /* LocalHTTPServer.swift in Sources */, A10000000000000000000098 /* SegmentDownloader.swift in Sources */, A10000000000000000000097 /* HLS.swift in Sources */, A10000000000000000000096 /* SeasonDownload.swift in Sources */, A10000000000000000000095 /* Downloads.swift in Sources */, A10000000000000000000094 /* Glass.swift in Sources */, A100000000000000000000F1 /* StreamingSidebar.swift in Sources */, A10000000000000000000093 /* Playback.swift in Sources */, A10000000000000000000092 /* HomeView.swift in Sources */, A10000000000000000000091 /* Catalog.swift in Sources */, A10000000000000000000013 /* VideoWebView.swift in Sources */, A10000000000000000000014 /* NativePlayerModel.swift in Sources */, A10000000000000000000015 /* NativePlayerView.swift in Sources */); runOnlyForDeploymentPostprocessing = 0; };
+		A10000000000000000000020 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A100000000000000000000E2 /* WatchProgress.swift in Sources */,
+				A100000000000000000000D2 /* RAR5Decoder.swift in Sources */,
+				A1000000000000000000009C /* RARArchive.swift in Sources */,
+				A1000000000000000000009D /* RARStream.swift in Sources */,
+				A1000000000000000000009E /* MKVPlayer.swift in Sources */,
+				A100000000000000000000C1 /* Config.swift in Sources */,
+				A10000000000000000000011 /* VimeoPlayerApp.swift in Sources */,
+				A10000000000000000000012 /* ContentView.swift in Sources */,
+				A1000000000000000000009B /* TMDB.swift in Sources */,
+				A100000000000000000000F9 /* AppleTVArtwork.swift in Sources */,
+				A10000000000000000000102 /* LocalCatalog.swift in Sources */,
+				A10000000000000000000106 /* Discover.swift in Sources */,
+				A10000000000000000000202 /* CatalogSearch.swift in Sources */,
+				A1000000000000000000020A /* AISearch.swift in Sources */,
+				A10000000000000000000204 /* SiriEntities.swift in Sources */,
+				A10000000000000000000206 /* SiriIntents.swift in Sources */,
+				A1000000000000000000009A /* StreamProxy.swift in Sources */,
+				A10000000000000000000099 /* LocalHTTPServer.swift in Sources */,
+				A10000000000000000000098 /* SegmentDownloader.swift in Sources */,
+				A10000000000000000000097 /* HLS.swift in Sources */,
+				A10000000000000000000096 /* SeasonDownload.swift in Sources */,
+				A10000000000000000000095 /* Downloads.swift in Sources */,
+				A10000000000000000000094 /* Glass.swift in Sources */,
+				A100000000000000000000F1 /* StreamingSidebar.swift in Sources */,
+				A10000000000000000000093 /* Playback.swift in Sources */,
+				A10000000000000000000092 /* HomeView.swift in Sources */,
+				A10000000000000000000091 /* Catalog.swift in Sources */,
+				A10000000000000000000013 /* VideoWebView.swift in Sources */,
+				A10000000000000000000014 /* NativePlayerModel.swift in Sources */,
+				A10000000000000000000015 /* NativePlayerView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		A10000000000000000000071 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; COPY_PHASE_STRIP = NO; DEBUG_INFORMATION_FORMAT = dwarf; ENABLE_TESTABILITY = YES; GCC_C_LANGUAGE_STANDARD = gnu17; IPHONEOS_DEPLOYMENT_TARGET = 26.0; MACOSX_DEPLOYMENT_TARGET = 26.0; ONLY_ACTIVE_ARCH = YES; SDKROOT = auto; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx"; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; name = Debug; };
-		A10000000000000000000072 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; GCC_C_LANGUAGE_STANDARD = gnu17; IPHONEOS_DEPLOYMENT_TARGET = 26.0; MACOSX_DEPLOYMENT_TARGET = 26.0; SDKROOT = auto; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx"; SWIFT_COMPILATION_MODE = wholemodule; }; name = Release; };
-		A10000000000000000000073 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ENABLE_USER_SCRIPT_SANDBOXING = NO; CODE_SIGN_ENTITLEMENTS = VimeoPlayer/VimeoPlayer.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = YES; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; INFOPLIST_KEY_CFBundleDisplayName = LaMovie; INFOPLIST_KEY_CFBundleName = LaMovie; INFOPLIST_KEY_UILaunchScreen_Generation = YES; INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../Frameworks"); MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.ruben.vimeoplayer; PRODUCT_NAME = LaMovie; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
-		A10000000000000000000074 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ENABLE_USER_SCRIPT_SANDBOXING = NO; CODE_SIGN_ENTITLEMENTS = VimeoPlayer/VimeoPlayer.entitlements; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = YES; ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; INFOPLIST_KEY_CFBundleDisplayName = LaMovie; INFOPLIST_KEY_CFBundleName = LaMovie; INFOPLIST_KEY_UILaunchScreen_Generation = YES; INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"; LD_RUNPATH_SEARCH_PATHS = ("$(inherited)", "@executable_path/Frameworks", "@executable_path/../Frameworks"); MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.ruben.vimeoplayer; PRODUCT_NAME = LaMovie; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Release; };
+		A10000000000000000000071 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A10000000000000000000072 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_COMPILATION_MODE = wholemodule;
+			};
+			name = Release;
+		};
+		A10000000000000000000073 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = VimeoPlayer/VimeoPlayer.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3978UBKA75;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = LaMovie;
+				INFOPLIST_KEY_CFBundleName = LaMovie;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ruben.lmomax;
+				PRODUCT_NAME = LaMovie;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A10000000000000000000074 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = VimeoPlayer/VimeoPlayer.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 3978UBKA75;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = LaMovie;
+				INFOPLIST_KEY_CFBundleName = LaMovie;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ruben.lmomax;
+				PRODUCT_NAME = LaMovie;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A10000000000000000000051 /* Build configuration list for PBXNativeTarget "VimeoPlayer" */ = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000073 /* Debug */, A10000000000000000000074 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
-		A10000000000000000000052 /* Build configuration list for PBXProject "VimeoPlayer" */ = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000071 /* Debug */, A10000000000000000000072 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		A10000000000000000000051 /* Build configuration list for PBXNativeTarget "VimeoPlayer" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000073 /* Debug */,
+				A10000000000000000000074 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000052 /* Build configuration list for PBXProject "VimeoPlayer" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000071 /* Debug */,
+				A10000000000000000000072 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
+
 /* Begin XCRemoteSwiftPackageReference section */
 		A100000000000000000000A1 /* XCRemoteSwiftPackageReference "vlckit-spm" */ = {
 			isa = XCRemoteSwiftPackageReference;

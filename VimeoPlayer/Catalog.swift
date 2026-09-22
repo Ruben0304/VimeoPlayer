@@ -1,6 +1,6 @@
 import Foundation
 
-enum ContentKind: String {
+enum ContentKind: String, CaseIterable {
     case movies, tvshows, animes, novels, wwe
 
     var label: String {
@@ -55,7 +55,14 @@ struct CatalogItem: Codable, Identifiable, Hashable {
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(Int.self, forKey: .id)
+        // A veces el id llega como texto ("123").
+        if let number = try? c.decode(Int.self, forKey: .id) {
+            id = number
+        } else if let number = Int(try c.decode(String.self, forKey: .id)) {
+            id = number
+        } else {
+            throw DecodingError.dataCorruptedError(forKey: .id, in: c, debugDescription: "id no numérico")
+        }
         title = try c.decode(String.self, forKey: .title)
         slug = try c.decode(String.self, forKey: .slug)
         type = (try? c.decode(String.self, forKey: .type)) ?? ""

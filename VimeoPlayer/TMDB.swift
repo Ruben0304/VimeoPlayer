@@ -52,6 +52,33 @@ enum ArtworkQuality: String, CaseIterable, Identifiable {
     }
 }
 
+/// Resultado de una consulta remota: distingue "no existe" (se puede recordar)
+/// de "falló la red" (no se guarda, para reintentarlo la próxima vez).
+enum FetchOutcome<Value> {
+    case found(Value), notFound, failed
+
+    var value: Value? {
+        switch self {
+        case .found(let value): value
+        case .notFound, .failed: nil
+        }
+    }
+}
+
+extension URLSession {
+    /// GET con decodificación JSON. Sin conexión, 429 o 5xx cuentan como `failed`;
+    /// cualquier otra respuesta sin datos útiles, como `notFound`.
+    func fetchJSON<T: Decodable>(_ type: T.Type, from url: URL, timeout: TimeInterval = 10) async -> FetchOutcome<T> {
+        let request = URLRequest(url: url, timeoutInterval: timeout)
+        guard let (data, response) = try? await data(for: request),
+              let http = response as? HTTPURLResponse else { return .failed }
+        if http.statusCode == 429 || http.statusCode >= 500 { return .failed }
+        guard (200..<300).contains(http.statusCode),
+              let decoded = try? JSONDecoder().decode(T.self, from: data) else { return .notFound }
+        return .found(decoded)
+    }
+}
+
 /// Reparto (actor + personaje) devuelto por TMDB.
 struct CastMember: Identifiable, Hashable {
     let id: Int
@@ -91,6 +118,46 @@ struct StreamingAvailability: Equatable {
     var free: [StreamingProvider] = []
 
     var isEmpty: Bool { subscription.isEmpty && free.isEmpty }
+
+    /// Cómo se accede a `provider` en este país ("Suscripción", "Gratis"); vacío si no está.
+    func accessKinds(matching provider: (StreamingProvider) -> Bool) -> [String] {
+        var kinds: [String] = []
+        if subscription.contains(where: provider) { kinds.append("Suscripción") }
+        if free.contains(where: provider) { kinds.append("Gratis") }
+        return kinds
+    }
+}
+
+/// Consultas sobre "dónde ver" (código de país → plataformas), compartidas por la ficha y Siri.
+extension Dictionary where Key == String, Value == StreamingAvailability {
+    private static let spanish = Locale(identifier: "es")
+
+    /// Nombre del país en español ("ES" → "España").
+    static func countryName(_ code: String) -> String {
+        spanish.localizedString(forRegionCode: code) ?? code
+    }
+
+    /// Países con datos, por orden alfabético de su nombre en español.
+    var sortedCountries: [String] {
+        keys.sorted { Self.countryName($0).localizedCompare(Self.countryName($1)) == .orderedAscending }
+    }
+
+    /// Todas las plataformas del título en cualquier país, sin repetir.
+    var allProviders: [StreamingProvider] {
+        var seen = Set<Int>()
+        return values
+            .flatMap { $0.subscription + $0.free }
+            .filter { seen.insert($0.id).inserted }
+            .sorted { $0.name.localizedCompare($1.name) == .orderedAscending }
+    }
+
+    /// Países donde el título está en la plataforma, con el tipo de acceso.
+    func countries(offering provider: (StreamingProvider) -> Bool) -> [(code: String, kinds: [String])] {
+        sortedCountries.compactMap { code in
+            guard let kinds = self[code]?.accessKinds(matching: provider), !kinds.isEmpty else { return nil }
+            return (code, kinds)
+        }
+    }
 }
 
 /// Ficha de TMDB (sinopsis en español y reparto) para un título.
@@ -123,12 +190,19 @@ final class TMDBService {
 
     private var imagesCache: [String: TMDBImages] = [:]
     private var detailsCache: [String: TMDBDetails] = [:]
-    private var apiKey: String {
+    /// Búsquedas ya resueltas (título → id), compartidas por imágenes, ficha y título en inglés.
+    private var searchCache: [String: SearchMatch?] = [:]
+    var apiKey: String {
         let stored = UserDefaults.standard.string(forKey: "tmdbKey") ?? ""
         return stored.isEmpty ? (Config.tmdbAPIKey ?? "") : stored
     }
 
-    private struct SearchResult: Decodable { let id: Int }
+    private struct SearchResult: Decodable {
+        let id: Int
+        /// Título localizado (la búsqueda va en inglés): `title` en películas, `name` en series.
+        let title: String?
+        let name: String?
+    }
     private struct SearchResponse: Decodable { let results: [SearchResult] }
 
     private struct Logo: Decodable {
@@ -230,15 +304,24 @@ final class TMDBService {
         let cacheKey = cacheKey(for: item) + "|" + quality.rawValue
         if let cached = imagesCache[cacheKey] { return cached }
 
+        var failed = false
         for title in titlesToTry(for: item) {
-            if let id = await searchID(kind: item.kind, title: title, year: item.year),
-               let images = await fetchImages(kind: item.kind, id: id, quality: quality) {
-                imagesCache[cacheKey] = images
-                return images
+            switch await search(kind: item.kind, title: title, year: item.year) {
+            case .failed: failed = true
+            case .notFound: continue
+            case .found(let match):
+                switch await fetchImages(kind: item.kind, id: match.id, quality: quality) {
+                case .found(let images):
+                    imagesCache[cacheKey] = images
+                    return images
+                case .failed: failed = true
+                case .notFound: continue
+                }
             }
         }
         let empty = TMDBImages()
-        imagesCache[cacheKey] = empty
+        // Un fallo de red no se recuerda: la próxima vez se vuelve a intentar.
+        if !failed { imagesCache[cacheKey] = empty }
         return empty
     }
 
@@ -252,8 +335,8 @@ final class TMDBService {
         if let cached = detailsCache[cacheKey] { return cached }
 
         for title in titlesToTry(for: item) {
-            if let id = await searchID(kind: item.kind, title: title, year: item.year),
-               let details = await fetchDetails(kind: item.kind, id: id, quality: quality) {
+            if let match = await search(kind: item.kind, title: title, year: item.year).value,
+               let details = await fetchDetails(kind: item.kind, id: match.id, quality: quality) {
                 detailsCache[cacheKey] = details
                 return details
             }
@@ -261,12 +344,59 @@ final class TMDBService {
         return nil
     }
 
+    /// Ficha de un título que solo se conoce por su id de TMDB (p. ej. uno que aún no está en lamovie).
+    func details(tmdbID: Int, kind: ContentKind) async -> TMDBDetails? {
+        guard !apiKey.isEmpty else { return nil }
+
+        let quality = ArtworkQuality.current
+        let cacheKey = "tmdb|\(kind.isEpisodic ? "tv" : "movie")|\(tmdbID)|\(quality.rawValue)"
+        if let cached = detailsCache[cacheKey] { return cached }
+
+        guard let details = await fetchDetails(kind: kind, id: tmdbID, quality: quality) else { return nil }
+        detailsCache[cacheKey] = details
+        return details
+    }
+
     /// Compatibilidad: solo el logo (usado por `TitleLogo`).
     func logoURL(for item: CatalogItem) async -> URL? {
         await images(for: item).logo
     }
 
-    private func searchID(kind: ContentKind, title: String, year: String?) async -> Int? {
+    /// Título en inglés según TMDB, para buscar en catálogos en inglés como Apple TV
+    /// ("Folk med ångest" → "Anxious People"). `nil` si no hay clave o no se encontró.
+    func englishTitle(for item: CatalogItem) async -> String? {
+        guard !apiKey.isEmpty else { return nil }
+        for title in titlesToTry(for: item) {
+            if let match = await search(kind: item.kind, title: title, year: item.year).value {
+                return match.englishTitle
+            }
+        }
+        return nil
+    }
+
+    /// Id de TMDB de un título del catálogo (vía la búsqueda, que queda en caché).
+    func tmdbID(for item: CatalogItem) async -> Int? {
+        guard !apiKey.isEmpty else { return nil }
+        for title in titlesToTry(for: item) {
+            if let match = await search(kind: item.kind, title: title, year: item.year).value { return match.id }
+        }
+        return nil
+    }
+
+    /// Cuando el título sale de una lista de TMDB ya se sabe su id: se apunta como si se
+    /// hubiera buscado, y portadas y ficha se ahorran la búsqueda (y no se equivocan de título).
+    func remember(_ item: CatalogItem, tmdbID: Int, englishTitle: String?) {
+        guard let title = titlesToTry(for: item).first else { return }
+        let key = "\(item.kind.rawValue)|\(title)|\(item.year ?? "")"
+        if searchCache[key] == nil { searchCache[key] = .some(SearchMatch(id: tmdbID, englishTitle: englishTitle)) }
+    }
+
+    private struct SearchMatch { let id: Int; let englishTitle: String? }
+
+    private func search(kind: ContentKind, title: String, year: String?) async -> FetchOutcome<SearchMatch> {
+        let key = "\(kind.rawValue)|\(title)|\(year ?? "")"
+        if let cached = searchCache[key] { return cached.map { .found($0) } ?? .notFound }
+
         let isMovie = !kind.isEpisodic
         var components = URLComponents(string: "https://api.themoviedb.org/3/search/" + (isMovie ? "movie" : "tv"))!
         var query = [
@@ -278,14 +408,20 @@ final class TMDBService {
         }
         components.queryItems = query
 
-        guard let url = components.url,
-              let (data, response) = try? await URLSession.shared.data(from: url),
-              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-              let decoded = try? JSONDecoder().decode(SearchResponse.self, from: data) else { return nil }
-        return decoded.results.first?.id
+        guard let url = components.url else { return .notFound }
+        switch await URLSession.shared.fetchJSON(SearchResponse.self, from: url) {
+        case .found(let decoded):
+            let match = decoded.results.first.map { SearchMatch(id: $0.id, englishTitle: $0.title ?? $0.name) }
+            searchCache[key] = .some(match)
+            return match.map { .found($0) } ?? .notFound
+        case .notFound:
+            searchCache[key] = .some(nil)
+            return .notFound
+        case .failed: return .failed
+        }
     }
 
-    private func fetchImages(kind: ContentKind, id: Int, quality: ArtworkQuality) async -> TMDBImages? {
+    private func fetchImages(kind: ContentKind, id: Int, quality: ArtworkQuality) async -> FetchOutcome<TMDBImages> {
         let isMovie = !kind.isEpisodic
         var components = URLComponents(string: "https://api.themoviedb.org/3/\(isMovie ? "movie" : "tv")/\(id)/images")!
         components.queryItems = [
@@ -293,10 +429,13 @@ final class TMDBService {
             URLQueryItem(name: "include_image_language", value: "es,en,null"),
         ]
 
-        guard let url = components.url,
-              let (data, response) = try? await URLSession.shared.data(from: url),
-              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
-              let decoded = try? JSONDecoder().decode(ImagesResponse.self, from: data) else { return nil }
+        guard let url = components.url else { return .notFound }
+        let decoded: ImagesResponse
+        switch await URLSession.shared.fetchJSON(ImagesResponse.self, from: url) {
+        case .found(let response): decoded = response
+        case .notFound: return .notFound
+        case .failed: return .failed
+        }
 
         // Preferencia: idioma (es > en > sin idioma > otros), luego voto, luego ancho.
         func languageRank(_ lang: String?) -> Int {
@@ -324,12 +463,12 @@ final class TMDBService {
             return URL(string: "https://image.tmdb.org/t/p/\(size)" + first.filePath)
         }
 
-        return TMDBImages(
+        return .found(TMDBImages(
             logo: best(decoded.logos, excludeSVG: true, size: quality.logoSize),
             poster: best(decoded.posters, excludeSVG: false, size: quality.posterSize),
             backdrop: best(decoded.backdrops, excludeSVG: false, textless: true, size: quality.backdropSize),
             heroPoster: best(decoded.posters.filter { $0.iso6391 == nil }, excludeSVG: true, size: quality.heroSize)
-        )
+        ))
     }
 
     private func fetchDetails(kind: ContentKind, id: Int, quality: ArtworkQuality) async -> TMDBDetails? {
@@ -541,6 +680,40 @@ extension TMDBService {
         }
     }
 
+    /// Un título de TMDB por su id, con sus nombres alternativos (lo que Siri guarda de los
+    /// títulos que no están en lamovie). `nil` si no hay clave o TMDB no responde.
+    func suggestion(tmdbID: Int, isMovie: Bool) async -> TitleSuggestion? {
+        guard !apiKey.isEmpty else { return nil }
+        struct Payload: Decodable {
+            let title: String?, name: String?
+            let originalTitle: String?, originalName: String?
+            let releaseDate: String?, firstAirDate: String?
+            let posterPath: String?
+            enum CodingKeys: String, CodingKey {
+                case title, name
+                case originalTitle = "original_title", originalName = "original_name"
+                case releaseDate = "release_date", firstAirDate = "first_air_date", posterPath = "poster_path"
+            }
+        }
+        var components = URLComponents(string: "https://api.themoviedb.org/3/\(isMovie ? "movie" : "tv")/\(tmdbID)")!
+        components.queryItems = [
+            URLQueryItem(name: "api_key", value: apiKey),
+            URLQueryItem(name: "language", value: "es-ES"),
+        ]
+        guard let url = components.url,
+              let (data, response) = try? await URLSession.shared.data(from: url),
+              let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let payload = try? JSONDecoder().decode(Payload.self, from: data) else { return nil }
+        let result = MultiResult(
+            id: tmdbID, mediaType: isMovie ? "movie" : "tv",
+            title: payload.title, name: payload.name,
+            originalTitle: payload.originalTitle, originalName: payload.originalName,
+            releaseDate: payload.releaseDate, firstAirDate: payload.firstAirDate,
+            posterPath: payload.posterPath, genreIds: nil, originalLanguage: nil
+        )
+        return await Self.makeSuggestion(result, key: apiKey)
+    }
+
     private nonisolated static func searchMulti(_ query: String, key: String) async -> [MultiResult] {
         var components = URLComponents(string: "https://api.themoviedb.org/3/search/multi")!
         components.queryItems = [
@@ -739,6 +912,9 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            CatalogSettingsSection()
+            WantedSettingsSection()
+
             Section {
                 SecureField("Clave de API de TMDB (v3)", text: $tmdbKey)
                 Text("Se usa para mostrar los logos de título, las portadas y la ficha (sinopsis y reparto). Puedes conseguir una clave gratis en themoviedb.org. Se guarda solo en este equipo.")

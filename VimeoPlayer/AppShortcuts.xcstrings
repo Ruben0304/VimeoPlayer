@@ -1,0 +1,61 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Is it out on ${applicationName}?" : {
+      "localizations" : {
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "¿Ya salió en ${applicationName}?" } }
+      }
+    },
+    "Is it on ${applicationName}?" : {
+      "localizations" : {
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "¿Está en ${applicationName}?" } }
+      }
+    },
+    "Is it already on ${applicationName}?" : {
+      "localizations" : {
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "¿Ya está en ${applicationName}?" } }
+      }
+    },
+    "Search ${applicationName}" : {
+      "localizations" : {
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Buscar en ${applicationName}" } }
+      }
+    },
+    "Is ${item} out on ${applicationName}?" : {
+      "localizations" : {
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "¿Ya salió ${item} en ${applicationName}?" } }
+      }
+    },
+    "Is ${item} on ${applicationName}?" : {
+      "localizations" : {
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "¿Está ${item} en ${applicationName}?" } }
+      }
+    },
+    "Where to watch with ${applicationName}" : {
+      "localizations" : {
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "Dónde ver con ${applicationName}" } }
+      }
+    },
+    "Where can I watch it with ${applicationName}?" : {
+      "localizations" : {
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "¿Dónde puedo verla con ${applicationName}?" } }
+      }
+    },
+    "What platforms is it on in ${applicationName}?" : {
+      "localizations" : {
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "¿En qué plataformas está según ${applicationName}?" } }
+      }
+    },
+    "Is it on ${platform} in ${applicationName}?" : {
+      "localizations" : {
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "¿Está en ${platform} según ${applicationName}?" } }
+      }
+    },
+    "Where to watch ${item} with ${applicationName}" : {
+      "localizations" : {
+        "es" : { "stringUnit" : { "state" : "translated", "value" : "¿Dónde ver ${item} con ${applicationName}?" } }
+      }
+    }
+  },
+  "version" : "1.0"
+}
